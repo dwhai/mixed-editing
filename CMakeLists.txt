@@ -25,13 +25,34 @@ pkg_check_modules(FFMPEG REQUIRED
         libswresample
 )
 
-add_executable(MixedEditing main.cpp
-        src/resource/mainwindow.cpp
-        src/widget/include/mainwindow.h
+# 自动扫描源文件和头文件
+file(GLOB_RECURSE SOURCES
+        "main.cpp"
+        "src/resource/*.cpp"
+        "src/widget/source/*.cpp"
+        "src/ffmpeg/source/*.cpp"
+)
+
+file(GLOB_RECURSE HEADERS
+        "src/widget/include/*.h"
+        "src/ffmpeg/include/*.h"
+)
+
+# UI 文件和资源文件
+set(UI_FILES
         src/widget/ui/mainwindow.ui
+)
+
+set(QRC_FILES
         src/widget/resources/icons.qrc
-        src/ffmpeg/include/FFmpegEncoder.h
-        src/ffmpeg/source/FFmpegEncoder.cpp)
+)
+
+add_executable(MixedEditing
+        ${SOURCES}
+        ${HEADERS}
+        ${UI_FILES}
+        ${QRC_FILES}
+)
 
 # 包含 FFmpeg 头文件路径
 target_include_directories(MixedEditing PRIVATE

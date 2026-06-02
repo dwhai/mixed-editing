@@ -2,7 +2,7 @@
 // macOS-specific title bar integration helpers.
 //
 
-#include "../include/mac_titlebar.h"
+#include "../widget/include/mac_titlebar.h"
 
 #import <AppKit/AppKit.h>
 

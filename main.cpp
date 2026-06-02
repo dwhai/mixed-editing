@@ -1,5 +1,5 @@
 #include <QApplication>
-#include "./widget/include/mainwindow.h"
+#include "src/widget/include/mainwindow.h"
 #include <QScreen>
 #include <QRect>
 #include <QStyleHints>

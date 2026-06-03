@@ -1,11 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 project(MixedEditing)
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
-set(CMAKE_AUTOUIC ON)
-set(CMAKE_AUTOUIC_SEARCH_PATHS "${CMAKE_SOURCE_DIR}/src/widget/ui")
 
 
 find_package(Qt6 COMPONENTS
@@ -13,6 +12,10 @@ find_package(Qt6 COMPONENTS
         Gui
         Widgets
         Svg
+        Network
+        Multimedia
+        OpenGL
+        OpenGLWidgets
         REQUIRED)
 
 # 查找 FFmpeg 7
@@ -28,29 +31,26 @@ pkg_check_modules(FFMPEG REQUIRED
 # 自动扫描源文件和头文件
 file(GLOB_RECURSE SOURCES
         "main.cpp"
-        "src/resource/*.cpp"
+        "src/widget/resource/*.cpp"
         "src/widget/source/*.cpp"
         "src/ffmpeg/source/*.cpp"
+        "src/network/source/*.cpp"
 )
 
 file(GLOB_RECURSE HEADERS
         "src/widget/include/*.h"
         "src/ffmpeg/include/*.h"
+        "src/network/include/*.h"
 )
 
-# UI 文件和资源文件
-set(UI_FILES
-        src/widget/ui/mainwindow.ui
-)
-
+# 资源文件
 set(QRC_FILES
-        src/widget/resources/icons.qrc
+        src/resources/icons.qrc
 )
 
 add_executable(MixedEditing
         ${SOURCES}
         ${HEADERS}
-        ${UI_FILES}
         ${QRC_FILES}
 )
 
@@ -62,7 +62,7 @@ target_include_directories(MixedEditing PRIVATE
 
 if(APPLE)
     enable_language(OBJCXX)
-    target_sources(MixedEditing PRIVATE src/resource/mac_titlebar.mm)
+    target_sources(MixedEditing PRIVATE src/widget/source/mac_titlebar.mm)
     target_link_libraries(MixedEditing "-framework AppKit")
 endif()
 
@@ -72,6 +72,10 @@ target_link_libraries(MixedEditing
         Qt::Gui
         Qt::Widgets
         Qt::Svg
+        Qt::Network
+        Qt::Multimedia
+        Qt::OpenGL
+        Qt::OpenGLWidgets
         ${FFMPEG_LINK_LIBRARIES}
 )
 

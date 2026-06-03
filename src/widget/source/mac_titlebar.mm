@@ -2,7 +2,7 @@
 // macOS-specific title bar integration helpers.
 //
 
-#include "../widget/include/mac_titlebar.h"
+#include "../include/mac_titlebar.h"
 
 #import <AppKit/AppKit.h>
 
@@ -42,7 +42,7 @@ namespace Mixed {
         window.titleVisibility = NSWindowTitleHidden;
 
         // --- Leading accessory: brand label, sits right after the traffic lights ---
-        NSTextField *brand = [NSTextField labelWithString:@"剪映专业版"];
+        NSTextField *brand = [NSTextField labelWithString:@"Mixed"];
         brand.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
         brand.textColor = [NSColor labelColor];
         brand.translatesAutoresizingMaskIntoConstraints = NO;

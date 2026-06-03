@@ -8,14 +8,6 @@
 #include <QMainWindow>
 
 namespace Mixed {
-    QT_BEGIN_NAMESPACE
-
-    namespace Ui {
-        class MainWindow;
-    }
-
-    QT_END_NAMESPACE
-
     class MainWindow : public QMainWindow {
         Q_OBJECT
 
@@ -28,7 +20,8 @@ namespace Mixed {
         void showEvent(QShowEvent *event) override;
 
     private:
-        Ui::MainWindow *ui;
+        void setupUi();
+
         bool macTitleBarConfigured = false;
     };
 } // Mixed

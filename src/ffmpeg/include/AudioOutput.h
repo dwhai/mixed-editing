@@ -1,7 +1,8 @@
 //
 // Created by Anlk on 2026/6/3.
 // 音频播放：基于 Qt6 的 QAudioSink（Qt6 中用于裸 PCM 输出的推荐类，
-// 取代了 Qt5 的 QAudioOutput）。同时充当音画同步的“主时钟”。
+// 取代了 Qt5 的 QAudioOutput）。采用 push 模式（主动写入声卡），并以
+// 已播放时长充当音画同步的“主时钟”。
 //
 
 #ifndef MIXEDEDITING_AUDIOOUTPUT_H
@@ -9,48 +10,15 @@
 
 #include "PlayerTypes.h"
 
-#include <QAudioFormat>
-#include <QIODevice>
 #include <QObject>
 #include <atomic>
 #include <mutex>
 
 class QAudioSink;
+class QIODevice;
+class QTimer;
 
 namespace Mixed::Player {
-
-    // QAudioSink 在拉模式下通过该 QIODevice 主动拉取已解码的 PCM 数据，
-    // 并据此维护“已播放位置”作为主时钟。
-    class AudioDevice : public QIODevice {
-        Q_OBJECT
-
-    public:
-        explicit AudioDevice(int bytesPerSecond, QObject *parent = nullptr);
-
-        void enqueue(const AudioFrame &frame);
-        void clearBuffer();
-        size_t queuedBytes() const;
-
-        // 已交付给声卡的音频位置（秒）。
-        double deliveredPts() const { return m_deliveredPts.load(); }
-
-        // 拉模式为顺序设备。
-        bool isSequential() const override { return true; }
-
-    protected:
-        qint64 readData(char *data, qint64 maxlen) override;
-        qint64 writeData(const char *data, qint64 len) override;
-
-    private:
-        int m_bytesPerSecond;
-        std::deque<AudioFrame> m_queue;
-        mutable std::mutex m_mutex;
-        std::atomic<size_t> m_queuedBytes{0};
-
-        AudioFrame m_current;          // 正在消费的帧
-        qint64 m_offset = 0;           // 当前帧已消费字节数
-        std::atomic<double> m_deliveredPts{0.0};
-    };
 
     class AudioOutput : public QObject {
         Q_OBJECT
@@ -74,16 +42,31 @@ namespace Mixed::Player {
         int channels() const { return m_channels; }
         int bytesPerSecond() const { return m_sampleRate * m_channels * 2; }
 
-        // 主时钟：当前实际播放到的音频时间戳（秒）。
-        // = 已交付声卡的 PTS - 声卡内部尚未播放的缓冲延迟。
+        // 主时钟：声卡已实际播放到的音频时间戳（秒）。
+        // = 首个样本 PTS + 已处理时长（QAudioSink::processedUSecs）。
         double masterClock() const;
 
-        // 当前已缓冲（队列中尚未交付）音频时长（秒），用于解码端节流。
+        // 当前已缓冲（本地队列 + 声卡内部）音频时长（秒），用于解码端节流。
         double bufferedSeconds() const;
+
+    private slots:
+        // 定时把本地队列中的 PCM 写入声卡空闲缓冲（push 模式）。
+        void feed();
 
     private:
         QAudioSink *m_sink = nullptr;
-        AudioDevice *m_device = nullptr;
+        QIODevice *m_io = nullptr;   // 由 QAudioSink::start() 返回，归声卡所有
+        QTimer *m_feedTimer = nullptr;
+
+        std::deque<AudioFrame> m_queue;
+        mutable std::mutex m_mutex;
+        std::atomic<size_t> m_queuedBytes{0};
+
+        AudioFrame m_current;        // 正在写入的帧
+        qint64 m_offset = 0;         // 当前帧已写入字节数
+        double m_startPts = 0.0;     // 首个写入样本的 PTS
+        std::atomic<bool> m_started{false};
+
         int m_sampleRate = 44100;
         int m_channels = 2;
         bool m_running = false;

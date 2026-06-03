@@ -96,6 +96,7 @@ namespace Mixed::Player {
                     return;
                 }
                 m_nextButton->setEnabled(true);
+                qDebug() << "获取到" << m_urls.size() << "个视频 url:" << m_urls[0];
                 m_status->setText(QStringLiteral("共获取到 %1 个视频").arg(m_urls.size()));
                 playIndex(0);
             },

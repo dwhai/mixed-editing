@@ -8,7 +8,7 @@ using namespace Mixed;
 int main(int argc, char *argv[]) {
     QApplication a(argc, argv);
     a.setApplicationName("Mixed");
-    QApplication::styleHints()->setColorScheme(Qt::ColorScheme::Dark);
+    QApplication::styleHints()->setColorScheme(Qt::ColorScheme::Light);
     MainWindow w;
     w.resize(1280, 760);
     

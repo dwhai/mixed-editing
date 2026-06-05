@@ -16,8 +16,9 @@ namespace API {
 VideoAPI::VideoAPI(QNetworkAccessManager* manager) : networkManager(manager) {
 }
 
-void VideoAPI::getFeed(qint64 date, FeedCallback callback, ErrorCallback errorCallback) {
-    QString url = QString("%1/api/v2/feed?date=%2").arg(baseUrl).arg(date);
+void VideoAPI::getFeed(const QString& date, FeedCallback callback, ErrorCallback errorCallback) {
+    // 游标式翻页：首屏 date 为空字符串，后续页传上一次解析出的游标值。
+    QString url = QString("%1/api/v2/feed?date=%2").arg(baseUrl, date);
     
     getRequest(url, [callback](QNetworkReply* reply) {
         QByteArray data = reply->readAll();
@@ -150,7 +151,34 @@ void VideoAPI::getRankList(RankCallback callback, ErrorCallback errorCallback, c
 
 void VideoAPI::getVideoDetail(int videoId, FeedCallback callback, ErrorCallback errorCallback) {
     QString url = QString("%1/api/v4/video/related?id=%2").arg(baseUrl).arg(videoId);
-    getFeed(videoId, callback, errorCallback); // 复用getFeed的解析逻辑
+    getFeed(QString::number(videoId), callback, errorCallback); // 复用getFeed的解析逻辑
+}
+
+void VideoAPI::getRelated(int videoId, RankCallback callback, ErrorCallback errorCallback) {
+    // 相关推荐接口：返回顶层 { itemList: [...] }，每项形如 { type, data, ... }，
+    // 与排行榜结构一致，故复用 RankResponse + ListItem::fromJson 解析。
+    QString url = QString("%1/api/v4/video/related?id=%2").arg(baseUrl).arg(videoId);
+
+    getRequest(url, [callback](QNetworkReply* reply) {
+        QByteArray data = reply->readAll();
+        QJsonDocument doc = QJsonDocument::fromJson(data);
+        QJsonObject json = doc.object();
+
+        Models::RankResponse response;
+        response.count = json["count"].toInt();
+        response.total = json["total"].toInt();
+        response.nextPageUrl = json["nextPageUrl"].toString().toStdString();
+        response.adExist = json["adExist"].toBool();
+
+        if (json.contains("itemList")) {
+            QJsonArray itemArray = json["itemList"].toArray();
+            for (const auto& itemJson : itemArray) {
+                response.itemList.push_back(Models::ListItem::fromJson(itemJson.toObject()));
+            }
+        }
+
+        callback(response, true);
+    }, errorCallback);
 }
 
 void VideoAPI::getRequest(const QString& url, const std::function<void(QNetworkReply*)>& successHandler, ErrorCallback errorCallback) {

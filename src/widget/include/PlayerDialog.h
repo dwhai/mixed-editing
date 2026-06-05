@@ -1,13 +1,14 @@
 //
-// Created by Anlk on 2026/6/3.
-// 播放页：通过 VideoAPI 拉取首页视频列表，取其播放地址（playUrl）后用
-// MediaPlayer 播放，演示“视频源通过调用结果获取”的完整链路。
+// Created by Anlk on 2026/6/6.
+// 播放器对话框：从原 PlayerPage 抽离而来的独立非模态 QDialog。
+// 不再自行拉取首页列表，改由列表页通过 setPlaylist() 传入播放列表与起始索引；
+// 右侧「相关视频」面板通过 /api/v4/video/related 接口拉取并渲染。
 //
 
-#ifndef MIXEDEDITING_PLAYERPAGE_H
-#define MIXEDEDITING_PLAYERPAGE_H
+#ifndef MIXEDEDITING_PLAYERDIALOG_H
+#define MIXEDEDITING_PLAYERDIALOG_H
 
-#include <QWidget>
+#include <QDialog>
 #include <vector>
 #include "../../network/include/models/VideoData.h"
 
@@ -15,6 +16,7 @@ class QLabel;
 class QPushButton;
 class QSlider;
 class QHBoxLayout;
+class QVBoxLayout;
 class QTimer;
 class QNetworkAccessManager;
 
@@ -25,27 +27,34 @@ namespace Mixed {
         class VideoGLWidget;
         class MediaPlayer;
 
-        class PlayerPage : public QWidget {
+        class PlayerDialog : public QDialog {
             Q_OBJECT
 
         public:
-            explicit PlayerPage(QWidget *parent = nullptr);
-            ~PlayerPage() override;
+            explicit PlayerDialog(QWidget *parent = nullptr);
+            ~PlayerDialog() override;
+
+            // 设置（或替换）播放列表并从 startIndex 开始播放。可在对话框已显示时再次调用。
+            void setPlaylist(const std::vector<Models::VideoData> &videos, int startIndex);
 
         protected:
-            void showEvent(QShowEvent *event) override;
-            void hideEvent(QHideEvent *event) override;
+            void closeEvent(QCloseEvent *event) override;
             bool eventFilter(QObject *watched, QEvent *event) override;
 
         private:
-            void fetchPlaylist();
             void playIndex(int index);
+            void playVideo(const Models::VideoData &video);
             QWidget *buildTopInfoArea();
             QWidget *buildPlayerArea();
             QWidget *buildControlBar();
+            QWidget *buildRelatedPanel();
             void buildVolumePopup();
             void layoutOverlay();
             QRect videoRect() const;
+
+            // 相关视频
+            void fetchRelated(int videoId);
+            void clearRelated();
 
             // 控制条显隐
             void showControls();
@@ -92,9 +101,13 @@ namespace Mixed {
             // 顶部信息区
             QLabel *m_titleLabel = nullptr;
             QLabel *m_authorLabel = nullptr;
+            QLabel *m_authorDescLabel = nullptr;
             QLabel *m_statsLabel = nullptr;
 
-            QWidget *m_relatedVideos = nullptr;
+            // 右侧相关视频面板
+            QWidget *m_relatedPanel = nullptr;
+            QWidget *m_relatedContent = nullptr;
+            QVBoxLayout *m_relatedLayout = nullptr;
             QHBoxLayout *m_playLayout = nullptr;
 
             QTimer *m_hideTimer = nullptr;
@@ -102,16 +115,13 @@ namespace Mixed {
             QNetworkAccessManager *m_network = nullptr;
             API::VideoAPI *m_api = nullptr;
 
-            // 从接口结果中提取出的视频数据。
+            // 当前播放列表（由列表页传入的快照）与当前索引。
             std::vector<Models::VideoData> m_videos;
             int m_current = -1;
-            bool m_initialized = false;
 
             // 播放器运行状态
             double m_videoAspect = 16.0 / 9.0;
             bool m_isFullscreen = false;
-            // 控制条/音量弹窗的可见状态（通过移出可视区实现隐藏，避免
-            // hide/show 在 QOpenGLWidget 之上破坏层级导致点击失效）。
             bool m_controlsVisible = true;
             bool m_volumePopupVisible = false;
             bool m_subtitlesEnabled = true;
@@ -123,4 +133,4 @@ namespace Mixed {
     } // namespace Player
 } // namespace Mixed
 
-#endif //MIXEDEDITING_PLAYERPAGE_H
+#endif //MIXEDEDITING_PLAYERDIALOG_H

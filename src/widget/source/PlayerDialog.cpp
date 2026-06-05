@@ -1,15 +1,17 @@
 //
-// Created by Anlk on 2026/6/3.
-// PlayerPage 实现。
+// Created by Anlk on 2026/6/6.
+// PlayerDialog 实现（自原 PlayerPage 抽离）。
 //
 
-#include "../include/PlayerPage.h"
+#include "../include/PlayerDialog.h"
 #include "../include/VideoGLWidget.h"
+#include "../include/VideoCard.h"
 
 #include "../../ffmpeg/include/MediaPlayer.h"
 #include "../../network/include/VideoAPI.h"
 
 #include <QAction>
+#include <QCloseEvent>
 #include <QCursor>
 #include <QDateTime>
 #include <QEvent>
@@ -19,7 +21,7 @@
 #include <QMenu>
 #include <QNetworkAccessManager>
 #include <QPushButton>
-#include <QResizeEvent>
+#include <QScrollArea>
 #include <QSlider>
 #include <QStyle>
 #include <QTimer>
@@ -27,7 +29,13 @@
 
 namespace Mixed::Player {
 
-    PlayerPage::PlayerPage(QWidget *parent) : QWidget(parent) {
+    PlayerDialog::PlayerDialog(QWidget *parent) : QDialog(parent) {
+        setObjectName("playerDialog");
+        setWindowTitle(QStringLiteral("视频播放"));
+        // 非模态：用户可在播放时返回列表继续浏览。
+        setModal(false);
+        setMinimumSize(900, 560);
+
         auto *layout = new QVBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 0);
         layout->setSpacing(12);
@@ -40,27 +48,20 @@ namespace Mixed::Player {
         m_playLayout->setSpacing(12);
 
         m_playLayout->addWidget(buildPlayerArea(), 7);
-
-        // 右侧：相关视频列表（占位）
-        m_relatedVideos = new QWidget(this);
-        m_relatedVideos->setObjectName("relatedVideos");
-        m_relatedVideos->setMinimumWidth(220);
-        m_playLayout->addWidget(m_relatedVideos, 3);
+        m_playLayout->addWidget(buildRelatedPanel(), 3);
 
         layout->addLayout(m_playLayout, /*stretch=*/1);
 
-        // 控制条自动隐藏定时器（鼠标离开 5s 后隐藏）。
+        // 控制条自动隐藏定时器（鼠标离开 3s 后隐藏）。
         m_hideTimer = new QTimer(this);
         m_hideTimer->setSingleShot(true);
-        m_hideTimer->setInterval(5000);
+        m_hideTimer->setInterval(3000);
         connect(m_hideTimer, &QTimer::timeout, this, [this] {
-            // 鼠标仍在播放区域内则不隐藏，继续等待。
             const QPoint local = m_playerContainer->mapFromGlobal(QCursor::pos());
             if (m_playerContainer->rect().contains(local)) {
                 scheduleHideControls();
                 return;
             }
-            // 通过移出可视区隐藏（不调用 hide），保持堆叠层级稳定。
             m_controlsVisible = false;
             m_volumePopupVisible = false;
             layoutOverlay();
@@ -88,20 +89,19 @@ namespace Mixed::Player {
             playIndex((m_current + 1) % static_cast<int>(m_videos.size()));
         });
 
-        connect(m_qualityButton, &QPushButton::clicked, this, &PlayerPage::showQualityMenu);
-        connect(m_speedButton, &QPushButton::clicked, this, &PlayerPage::showSpeedMenu);
+        connect(m_qualityButton, &QPushButton::clicked, this, &PlayerDialog::showQualityMenu);
+        connect(m_speedButton, &QPushButton::clicked, this, &PlayerDialog::showSpeedMenu);
         connect(m_volumeButton, &QPushButton::clicked, this, [this] {
             if (!m_volumePopup) return;
             m_volumePopupVisible = !m_volumePopupVisible;
             m_controlsVisible = true;
-            layoutOverlay(); // 重新布局并定位弹窗
+            layoutOverlay();
             scheduleHideControls();
         });
-        connect(m_subtitleButton, &QPushButton::clicked, this, &PlayerPage::toggleSubtitles);
-        connect(m_fullscreenButton, &QPushButton::clicked, this, &PlayerPage::toggleFullscreen);
+        connect(m_subtitleButton, &QPushButton::clicked, this, &PlayerDialog::toggleSubtitles);
+        connect(m_fullscreenButton, &QPushButton::clicked, this, &PlayerDialog::toggleFullscreen);
 
         m_player = new MediaPlayer(this);
-        // 解码引擎与显示控件通过信号解耦：引擎出帧，控件上屏。
         connect(m_player, &MediaPlayer::frameReady, this, [this](const VideoFrame &f) {
             if (f.valid() && f.height > 0) {
                 const double aspect = static_cast<double>(f.width) / f.height;
@@ -119,7 +119,7 @@ namespace Mixed::Player {
             m_status->setText(QStringLiteral("播放错误: ") + msg);
             m_status->show();
         });
-        connect(m_player, &MediaPlayer::positionChanged, this, &PlayerPage::onPositionChanged);
+        connect(m_player, &MediaPlayer::positionChanged, this, &PlayerDialog::onPositionChanged);
         connect(m_player, &MediaPlayer::subtitleChanged, this, [this](const QString &text) {
             if (m_subtitlesEnabled && !text.isEmpty()) {
                 m_subtitleLabel->setText(text);
@@ -134,35 +134,39 @@ namespace Mixed::Player {
         m_api = new API::VideoAPI(m_network);
     }
 
-    void PlayerPage::showEvent(QShowEvent *event) {
-        QWidget::showEvent(event);
-        layoutOverlay();
-        showControls();
-        if (!m_initialized) {
-            m_initialized = true;
-            fetchPlaylist();
-        }
-    }
-
-    void PlayerPage::hideEvent(QHideEvent *event) {
-        QWidget::hideEvent(event);
-        if (m_player && m_player->isPlaying() && !m_player->isPaused()) {
-            m_player->pause();
-            m_playPauseButton->setText(QStringLiteral("▶"));
-        }
-    }
-
-    PlayerPage::~PlayerPage() {
+    PlayerDialog::~PlayerDialog() {
         if (m_player) m_player->stop();
         delete m_api;
     }
 
-    QWidget *PlayerPage::buildTopInfoArea() {
+    void PlayerDialog::closeEvent(QCloseEvent *event) {
+        // 关闭时停止播放，释放资源（对话框可被复用，下次 setPlaylist 重新开始）。
+        if (m_isFullscreen) exitFullscreen();
+        if (m_player) m_player->stop();
+        if (m_playPauseButton) m_playPauseButton->setText(QStringLiteral("▶"));
+        QDialog::closeEvent(event);
+    }
+
+    void PlayerDialog::setPlaylist(const std::vector<Models::VideoData> &videos, int startIndex) {
+        m_videos = videos;
+        const bool hasList = !m_videos.empty();
+        m_prevButton->setEnabled(hasList);
+        m_nextButton->setEnabled(hasList);
+        if (!hasList) return;
+        if (startIndex < 0) startIndex = 0;
+        if (startIndex >= static_cast<int>(m_videos.size())) {
+            startIndex = static_cast<int>(m_videos.size()) - 1;
+        }
+        layoutOverlay();
+        playIndex(startIndex);
+    }
+
+    QWidget *PlayerDialog::buildTopInfoArea() {
         auto *area = new QWidget(this);
         auto *layout = new QHBoxLayout(area);
-        layout->setContentsMargins(12, 12, 12, 12);
+        layout->setContentsMargins(16, 14, 16, 4);
 
-        // 左侧：标题和统计信息
+        // 左侧：标题和统计信息（播放量 · 发布时间）。
         auto *leftLayout = new QVBoxLayout();
         m_titleLabel = new QLabel(QStringLiteral("视频标题"), area);
         m_titleLabel->setObjectName("videoTitle");
@@ -176,19 +180,23 @@ namespace Mixed::Player {
 
         layout->addLayout(leftLayout, 7);
 
-        // 右侧：作者信息
+        // 右侧：作者信息及简介。
         auto *rightLayout = new QVBoxLayout();
         m_authorLabel = new QLabel(QStringLiteral("作者名称"), area);
         m_authorLabel->setObjectName("authorName");
         rightLayout->addWidget(m_authorLabel);
+
+        m_authorDescLabel = new QLabel(QStringLiteral("作者简介"), area);
+        m_authorDescLabel->setObjectName("authorDesc");
+        m_authorDescLabel->setWordWrap(true);
+        rightLayout->addWidget(m_authorDescLabel);
         rightLayout->addStretch();
 
         layout->addLayout(rightLayout, 3);
         return area;
     }
 
-    QWidget *PlayerPage::buildPlayerArea() {
-        // 堆叠布局：视频画面按宽高比居中铺放，控制条/字幕以子控件悬浮其上。
+    QWidget *PlayerDialog::buildPlayerArea() {
         m_playerContainer = new QWidget(this);
         m_playerContainer->setObjectName("playerContainer");
         m_playerContainer->setMinimumSize(480, 300);
@@ -202,7 +210,6 @@ namespace Mixed::Player {
         m_controlBar = buildControlBar();
         buildVolumePopup();
 
-        // 字幕叠加层。
         m_subtitleLabel = new QLabel(m_playerContainer);
         m_subtitleLabel->setObjectName("playerSubtitle");
         m_subtitleLabel->setAlignment(Qt::AlignHCenter | Qt::AlignBottom);
@@ -210,14 +217,44 @@ namespace Mixed::Player {
         m_subtitleLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
         m_subtitleLabel->hide();
 
-        // 监听容器尺寸变化与鼠标活动。
         m_playerContainer->installEventFilter(this);
         m_video->installEventFilter(this);
         m_controlBar->installEventFilter(this);
         return m_playerContainer;
     }
 
-    QWidget *PlayerPage::buildControlBar() {
+    QWidget *PlayerDialog::buildRelatedPanel() {
+        m_relatedPanel = new QWidget(this);
+        m_relatedPanel->setObjectName("relatedVideos");
+        m_relatedPanel->setMinimumWidth(240);
+
+        auto *outer = new QVBoxLayout(m_relatedPanel);
+        outer->setContentsMargins(12, 12, 12, 12);
+        outer->setSpacing(10);
+
+        auto *title = new QLabel(QStringLiteral("相关视频"), m_relatedPanel);
+        title->setObjectName("relatedTitle");
+        outer->addWidget(title);
+
+        auto *scroll = new QScrollArea(m_relatedPanel);
+        scroll->setWidgetResizable(true);
+        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        scroll->setFrameShape(QFrame::NoFrame);
+        outer->addWidget(scroll, 1);
+
+        m_relatedContent = new QWidget(scroll);
+        m_relatedContent->setObjectName("relatedContent");
+        scroll->setWidget(m_relatedContent);
+
+        m_relatedLayout = new QVBoxLayout(m_relatedContent);
+        m_relatedLayout->setContentsMargins(0, 0, 0, 0);
+        m_relatedLayout->setSpacing(12);
+        m_relatedLayout->addStretch();
+
+        return m_relatedPanel;
+    }
+
+    QWidget *PlayerDialog::buildControlBar() {
         auto *bar = new QWidget(m_playerContainer);
         bar->setObjectName("playerControlBar");
 
@@ -277,15 +314,14 @@ namespace Mixed::Player {
         m_fullscreenButton = makeIconButton(QStringLiteral("⛶"), QStringLiteral("全屏"));
         layout->addWidget(m_fullscreenButton);
 
-        // 状态文本独立悬浮在控制条上方左下角，承载加载/错误提示。
-        m_status = new QLabel(QStringLiteral("正在获取视频列表..."), m_playerContainer);
+        m_status = new QLabel(QStringLiteral(""), m_playerContainer);
         m_status->setObjectName("playerStatus");
         m_status->setAttribute(Qt::WA_TransparentForMouseEvents);
 
         return bar;
     }
 
-    void PlayerPage::buildVolumePopup() {
+    void PlayerDialog::buildVolumePopup() {
         m_volumePopup = new QWidget(m_playerContainer);
         m_volumePopup->setObjectName("volumePopup");
         m_volumePopup->setFixedSize(40, 130);
@@ -299,14 +335,13 @@ namespace Mixed::Player {
         m_volumeSlider->setValue(100);
         vl->addWidget(m_volumeSlider, 0, Qt::AlignHCenter);
 
-        connect(m_volumeSlider, &QSlider::valueChanged, this, &PlayerPage::onVolumeChanged);
+        connect(m_volumeSlider, &QSlider::valueChanged, this, &PlayerDialog::onVolumeChanged);
 
         m_volumePopup->installEventFilter(this);
-        // 不调用 hide()，改为初始移到可视区外，避免后续 show 破坏堆叠层级。
         m_volumePopup->move(0, 5000);
     }
 
-    QRect PlayerPage::videoRect() const {
+    QRect PlayerDialog::videoRect() const {
         const QRect r = m_playerContainer->rect();
         const double cw = r.width();
         const double ch = r.height();
@@ -324,17 +359,14 @@ namespace Mixed::Player {
         return QRect(x, y, static_cast<int>(w), static_cast<int>(h));
     }
 
-    void PlayerPage::layoutOverlay() {
+    void PlayerDialog::layoutOverlay() {
         if (!m_playerContainer || !m_video) return;
         const QRect vr = videoRect();
         m_video->setGeometry(vr);
 
-        // 关键：悬浮控件始终保持 show() 状态，仅通过移动到可视区外来“隐藏”，
-        // 从而避免在 QOpenGLWidget 之上反复 hide/show 破坏堆叠层级。
         const int barHeight = 48;
-        const int offY = m_playerContainer->height() + 80; // 容器外（被裁剪不可见）
+        const int offY = m_playerContainer->height() + 80;
 
-        // 字幕：与控制条无关，始终位于画面底部上方。
         if (m_subtitleLabel) {
             const int subH = 64;
             m_subtitleLabel->setGeometry(vr.x() + 24,
@@ -370,10 +402,8 @@ namespace Mixed::Player {
         }
     }
 
-    void PlayerPage::showControls() {
+    void PlayerDialog::showControls() {
         if (!m_controlBar) return;
-        // 仅在“隐藏->显示”切换时重新布局，避免每次鼠标移动都重排/raise，
-        // 既减少开销，也避免在点击过程中打断按钮的 press/release。
         if (!m_controlsVisible) {
             m_controlsVisible = true;
             layoutOverlay();
@@ -381,18 +411,17 @@ namespace Mixed::Player {
         scheduleHideControls();
     }
 
-    void PlayerPage::scheduleHideControls() {
+    void PlayerDialog::scheduleHideControls() {
         if (m_hideTimer) m_hideTimer->start();
     }
 
-    bool PlayerPage::eventFilter(QObject *watched, QEvent *event) {
+    bool PlayerDialog::eventFilter(QObject *watched, QEvent *event) {
         const QEvent::Type t = event->type();
 
         if (watched == m_playerContainer && t == QEvent::Resize) {
             layoutOverlay();
         }
 
-        // 鼠标在播放区域活动 -> 显示控制条并重置隐藏计时。
         if (watched == m_playerContainer || watched == m_video ||
             watched == m_controlBar || watched == m_volumePopup) {
             if (t == QEvent::MouseMove || t == QEvent::Enter ||
@@ -403,7 +432,6 @@ namespace Mixed::Player {
             }
         }
 
-        // 全屏下按 Esc 退出。
         if (watched == m_playerContainer && t == QEvent::KeyPress) {
             auto *ke = static_cast<QKeyEvent *>(event);
             if (ke->key() == Qt::Key_Escape && m_isFullscreen) {
@@ -411,10 +439,10 @@ namespace Mixed::Player {
                 return true;
             }
         }
-        return QWidget::eventFilter(watched, event);
+        return QDialog::eventFilter(watched, event);
     }
 
-    void PlayerPage::showQualityMenu() {
+    void PlayerDialog::showQualityMenu() {
         if (m_current < 0 || m_current >= static_cast<int>(m_videos.size())) return;
         const auto &video = m_videos[m_current];
         if (video.playInfo.empty()) return;
@@ -434,7 +462,7 @@ namespace Mixed::Player {
         menu.exec(m_qualityButton->mapToGlobal(QPoint(0, -menu.sizeHint().height())));
     }
 
-    void PlayerPage::applyQuality(int playInfoIndex) {
+    void PlayerDialog::applyQuality(int playInfoIndex) {
         if (m_current < 0 || m_current >= static_cast<int>(m_videos.size())) return;
         const auto &video = m_videos[m_current];
         if (playInfoIndex < 0 || playInfoIndex >= static_cast<int>(video.playInfo.size())) return;
@@ -454,14 +482,14 @@ namespace Mixed::Player {
         m_playPauseButton->setText(QStringLiteral("⏸"));
     }
 
-    void PlayerPage::populateQuality(const Models::VideoData &video) {
+    void PlayerDialog::populateQuality(const Models::VideoData &video) {
         m_currentQuality = -1;
         m_qualityButton->setEnabled(!video.playInfo.empty());
         m_qualityButton->setText(video.playInfo.empty() ? QStringLiteral("画质")
                                                         : QStringLiteral("自动"));
     }
 
-    void PlayerPage::showSpeedMenu() {
+    void PlayerDialog::showSpeedMenu() {
         if (!m_player) return;
         QMenu menu(this);
         const double speeds[] = {0.5, 0.75, 1.0, 1.25, 1.5, 2.0};
@@ -482,14 +510,14 @@ namespace Mixed::Player {
         menu.exec(m_speedButton->mapToGlobal(QPoint(0, -menu.sizeHint().height())));
     }
 
-    void PlayerPage::onVolumeChanged(int value) {
+    void PlayerDialog::onVolumeChanged(int value) {
         m_volume = value / 100.0;
         m_muted = (value == 0);
         if (m_player) m_player->setVolume(m_volume);
         updateVolumeIcon();
     }
 
-    void PlayerPage::updateVolumeIcon() {
+    void PlayerDialog::updateVolumeIcon() {
         QString glyph;
         if (m_muted || m_volume <= 0.0) {
             glyph = QStringLiteral("🔇");
@@ -501,7 +529,7 @@ namespace Mixed::Player {
         m_volumeButton->setText(glyph);
     }
 
-    void PlayerPage::toggleFullscreen() {
+    void PlayerDialog::toggleFullscreen() {
         if (m_isFullscreen) {
             exitFullscreen();
         } else {
@@ -509,14 +537,13 @@ namespace Mixed::Player {
         }
     }
 
-    void PlayerPage::enterFullscreen() {
+    void PlayerDialog::enterFullscreen() {
         if (m_isFullscreen) return;
         m_isFullscreen = true;
 
         m_playLayout->removeWidget(m_playerContainer);
         m_playerContainer->setParent(nullptr);
         m_playerContainer->setWindowFlags(Qt::Window);
-        // 全屏时画面留黑边（而非透出桌面/页面背景）。
         m_playerContainer->setStyleSheet(
             QStringLiteral("QWidget#playerContainer{background-color:#000000;}"));
         m_playerContainer->showFullScreen();
@@ -529,12 +556,12 @@ namespace Mixed::Player {
         showControls();
     }
 
-    void PlayerPage::exitFullscreen() {
+    void PlayerDialog::exitFullscreen() {
         if (!m_isFullscreen) return;
         m_isFullscreen = false;
 
         m_playerContainer->setWindowFlags(Qt::Widget);
-        m_playerContainer->setStyleSheet(QString()); // 恢复透明背景
+        m_playerContainer->setStyleSheet(QString());
         // 重新放回播放区左侧（相关视频此时位于索引 0）。
         m_playLayout->insertWidget(0, m_playerContainer, 7);
         m_playerContainer->show();
@@ -546,7 +573,7 @@ namespace Mixed::Player {
         showControls();
     }
 
-    void PlayerPage::toggleSubtitles() {
+    void PlayerDialog::toggleSubtitles() {
         m_subtitlesEnabled = !m_subtitlesEnabled;
         m_subtitleButton->setProperty("active", m_subtitlesEnabled);
         m_subtitleButton->style()->unpolish(m_subtitleButton);
@@ -556,8 +583,7 @@ namespace Mixed::Player {
         }
     }
 
-    void PlayerPage::onPositionChanged(double position, double duration) {
-        // 部分流不上报总时长，回退到接口返回的 duration。
+    void PlayerDialog::onPositionChanged(double position, double duration) {
         if (duration <= 0 && m_current >= 0 &&
             m_current < static_cast<int>(m_videos.size())) {
             duration = m_videos[m_current].duration;
@@ -569,7 +595,7 @@ namespace Mixed::Player {
         m_timeLabel->setText(text);
     }
 
-    QString PlayerPage::formatTime(double seconds) {
+    QString PlayerDialog::formatTime(double seconds) {
         if (seconds < 0) seconds = 0;
         const int total = static_cast<int>(seconds);
         const int m = total / 60;
@@ -577,54 +603,26 @@ namespace Mixed::Player {
         return QStringLiteral("%1:%2").arg(m, 2, 10, QChar('0')).arg(s, 2, 10, QChar('0'));
     }
 
-    void PlayerPage::fetchPlaylist() {
-        // 注意：date=0 时开眼接口返回空列表，必须传入真实的毫秒时间戳。
-        m_api->getFeed(QDateTime::currentMSecsSinceEpoch(),
-            [this](const Models::FeedResponse &response, bool success) {
-                if (!success) {
-                    m_status->setText(QStringLiteral("获取列表失败"));
-                    return;
-                }
-                m_videos.clear();
-                for (const auto &issue : response.issueList) {
-                    for (const auto &item : issue.itemList) {
-                        QString type = QString::fromStdString(item.type);
-                        const auto &data = item.data;
-                        if (type.contains("video", Qt::CaseInsensitive) &&
-                            !data.playUrl.empty() && !data.ad) {
-                            m_videos.push_back(data);
-                        }
-                    }
-                }
-
-                if (m_videos.empty()) {
-                    m_status->setText(QStringLiteral("没有可播放的视频"));
-                    return;
-                }
-                m_nextButton->setEnabled(true);
-                m_prevButton->setEnabled(true);
-                playIndex(0);
-            },
-            [this](const QString &err) {
-                m_status->setText(QStringLiteral("网络错误: ") + err);
-            });
-    }
-
-    void PlayerPage::playIndex(int index) {
+    void PlayerDialog::playIndex(int index) {
         if (index < 0 || index >= static_cast<int>(m_videos.size())) return;
         m_current = index;
+        playVideo(m_videos[index]);
+    }
 
-        const auto &video = m_videos[index];
+    void PlayerDialog::playVideo(const Models::VideoData &video) {
         QString title = QString::fromStdString(video.title);
         if (title.isEmpty()) title = QStringLiteral("(无标题)");
 
         QString author = QString::fromStdString(video.author.name);
+        QString authorDesc = QString::fromStdString(video.author.description);
         int minutes = video.duration / 60;
         int seconds = video.duration % 60;
 
         // 更新顶部信息区
         m_titleLabel->setText(title);
         m_authorLabel->setText(author.isEmpty() ? QStringLiteral("未知作者") : author);
+        m_authorDescLabel->setText(authorDesc);
+        m_authorDescLabel->setVisible(!authorDesc.isEmpty());
 
         QString stats = QStringLiteral("%1次播放").arg(video.consumption.collectionCount);
         if (video.releaseTime > 0) {
@@ -633,12 +631,10 @@ namespace Mixed::Player {
         }
         m_statsLabel->setText(stats);
 
-        // 时间标签初始化为 00:00 / 总时长。
         m_timeLabel->setText(QStringLiteral("00:00 / %1:%2")
                                  .arg(minutes, 2, 10, QChar('0'))
                                  .arg(seconds, 2, 10, QChar('0')));
 
-        // 切换视频时清空字幕与状态提示。
         m_subtitleLabel->clear();
         m_subtitleLabel->hide();
         m_status->clear();
@@ -650,6 +646,48 @@ namespace Mixed::Player {
         m_playPauseButton->setEnabled(true);
         m_playPauseButton->setText(QStringLiteral("⏸"));
         showControls();
+
+        // 拉取相关视频填充右侧面板。
+        fetchRelated(video.id);
+    }
+
+    void PlayerDialog::clearRelated() {
+        if (!m_relatedLayout) return;
+        // 移除除末尾 stretch 外的所有项。
+        while (m_relatedLayout->count() > 1) {
+            QLayoutItem *item = m_relatedLayout->takeAt(0);
+            if (item->widget()) item->widget()->deleteLater();
+            delete item;
+        }
+    }
+
+    void PlayerDialog::fetchRelated(int videoId) {
+        if (!m_api || videoId <= 0) return;
+        clearRelated();
+
+        m_api->getRelated(videoId,
+            [this](const Models::RankResponse &response, bool success) {
+                if (!success) return;
+                clearRelated();
+                int idx = 0;
+                for (const auto &item : response.itemList) {
+                    QString type = QString::fromStdString(item.type);
+                    const auto &data = item.data;
+                    // 仅保留可播放的视频小卡，且作者信息齐全。
+                    if (!type.contains("video", Qt::CaseInsensitive)) continue;
+                    if (data.playUrl.empty() || data.ad) continue;
+
+                    auto *card = new VideoCard(data, idx, m_network, m_relatedContent);
+                    // 末尾 stretch 始终在最后，故插入到 count()-1 位置。
+                    m_relatedLayout->insertWidget(m_relatedLayout->count() - 1, card);
+
+                    Models::VideoData copy = data;
+                    connect(card, &VideoCard::clicked, this,
+                            [this, copy](int) { playVideo(copy); });
+                    ++idx;
+                }
+            },
+            [](const QString &) { /* 相关视频拉取失败时静默，不影响主播放 */ });
     }
 
 } // namespace Mixed::Player

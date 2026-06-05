@@ -11,20 +11,20 @@
 #include <QString>
 
 namespace Mixed::Theme {
-    // Core palette. Reuse these constants instead of hard-coding hex strings.
+    // Core palette (light theme). Reuse these constants instead of hard-coding hex strings.
     namespace Color {
-        inline constexpr auto Background = "#111217";
-        inline constexpr auto Sidebar = "#171a22";
-        inline constexpr auto Card = "#1c1f27";
-        inline constexpr auto AccountCard = "#1b1f2a";
-        inline constexpr auto DraftCard = "#1f232d";
-        inline constexpr auto NavActive = "#252a38";
-        inline constexpr auto NavHover = "#212636";
+        inline constexpr auto Background = "#f4f5f7";
+        inline constexpr auto Sidebar = "#ffffff";
+        inline constexpr auto Card = "#ffffff";
+        inline constexpr auto AccountCard = "#f4f5f7";
+        inline constexpr auto DraftCard = "#ffffff";
+        inline constexpr auto NavActive = "#e8eefc";
+        inline constexpr auto NavHover = "#eef0f4";
 
-        inline constexpr auto TextPrimary = "#eef2fa";
-        inline constexpr auto TextSecondary = "#c8cfde";
-        inline constexpr auto TextMuted = "#9aa4b8";
-        inline constexpr auto Accent = "#8fd2ff";
+        inline constexpr auto TextPrimary = "#1a1d24";
+        inline constexpr auto TextSecondary = "#5a6172";
+        inline constexpr auto TextMuted = "#8b92a3";
+        inline constexpr auto Accent = "#2f6df6";
     }
     QString styleSheet();
 }

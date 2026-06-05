@@ -3,14 +3,14 @@
 //
 
 #include "../include/mainwindow.h"
-#include "../include/sidebar.h"
+#include "../include/topbar.h"
 #include "../include/theme.h"
-#include "../include/PlayerPage.h"
+#include "../include/VideoListPage.h"
 #include "../include/homepage.h"
 
-#include <QHBoxLayout>
 #include <QShowEvent>
 #include <QStackedWidget>
+#include <QVBoxLayout>
 #include <QWidget>
 
 #ifdef Q_OS_MACOS
@@ -29,20 +29,21 @@ namespace Mixed {
         root->setObjectName("root");
         setCentralWidget(root);
 
-        auto *layout = new QHBoxLayout(root);
+        // 纵向布局：顶部 tab 菜单 + 下方页面堆栈。
+        auto *layout = new QVBoxLayout(root);
         layout->setContentsMargins(14, 14, 14, 14);
         layout->setSpacing(14);
 
-        auto *sidebar = new Sidebar(root);
-        layout->addWidget(sidebar);
+        auto *topBar = new TopBar(root);
+        layout->addWidget(topBar);
 
         m_pages = new QStackedWidget(root);
-        m_pages->addWidget(new HomePage(root));
-        m_pages->addWidget(new QWidget(root));
-        m_pages->addWidget(new Player::PlayerPage(root));
+        m_pages->addWidget(new VideoListPage(root));   // 0 短剧（视频列表网格）
+        m_pages->addWidget(new HomePage(root));        // 1 剪辑
+        m_pages->addWidget(new QWidget(root));         // 2 模板（占位）
         layout->addWidget(m_pages, 1);
 
-        connect(sidebar, &Sidebar::pageRequested, this, &MainWindow::switchPage);
+        connect(topBar, &TopBar::pageRequested, this, &MainWindow::switchPage);
     }
 
     void MainWindow::showEvent(QShowEvent *event) {

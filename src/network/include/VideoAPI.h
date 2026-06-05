@@ -27,8 +27,8 @@ class VideoAPI {
 public:
     explicit VideoAPI(QNetworkAccessManager* manager);
     
-    // 获取首页数据（date 为毫秒时间戳；传 0 时服务端返回空列表）
-    void getFeed(qint64 date, FeedCallback callback, ErrorCallback errorCallback = nullptr);
+    // 获取首页数据（date 为游标：首屏传空字符串；后续页传上一次 nextPageUrl 解析出的值）
+    void getFeed(const QString& date, FeedCallback callback, ErrorCallback errorCallback = nullptr);
     
     // 获取分类数据
     void getCategories(int start, CategoryCallback callback, ErrorCallback errorCallback = nullptr);
@@ -41,6 +41,9 @@ public:
     
     // 获取视频详情
     void getVideoDetail(int videoId, FeedCallback callback, ErrorCallback errorCallback = nullptr);
+
+    // 获取相关推荐（/api/v4/video/related?id=），响应结构与排行榜一致（itemList）。
+    void getRelated(int videoId, RankCallback callback, ErrorCallback errorCallback = nullptr);
 
 private:
     QNetworkAccessManager* networkManager;

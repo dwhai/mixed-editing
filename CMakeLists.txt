@@ -29,6 +29,10 @@ pkg_check_modules(FFMPEG REQUIRED
         libswresample
 )
 
+# 查找 libwebp：该 Qt 安装未自带 webp 图片插件，而开眼 CDN 的封面统一返回 webp，
+# 需用 libwebp 解码作为 QPixmap 的回退路径。
+pkg_check_modules(WEBP REQUIRED libwebp)
+
 # 自动扫描源文件和头文件
 file(GLOB_RECURSE SOURCES
         "main.cpp"
@@ -58,6 +62,7 @@ add_executable(MixedEditing
 # 包含 FFmpeg 头文件路径
 target_include_directories(MixedEditing PRIVATE
         ${FFMPEG_INCLUDE_DIRS}
+        ${WEBP_INCLUDE_DIRS}
         ${CMAKE_SOURCE_DIR}/src/ffmpeg/include
 )
 
@@ -78,5 +83,6 @@ target_link_libraries(MixedEditing
         Qt::OpenGL
         Qt::OpenGLWidgets
         ${FFMPEG_LINK_LIBRARIES}
+        ${WEBP_LINK_LIBRARIES}
 )
 

@@ -24,6 +24,7 @@ pkg_check_modules(FFMPEG REQUIRED
         libavcodec
         libavformat
         libavutil
+        libavfilter
         libswscale
         libswresample
 )

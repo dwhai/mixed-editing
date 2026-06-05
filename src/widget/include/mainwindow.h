@@ -7,6 +7,8 @@
 
 #include <QMainWindow>
 
+class QStackedWidget;
+
 namespace Mixed {
     class MainWindow : public QMainWindow {
         Q_OBJECT
@@ -19,9 +21,13 @@ namespace Mixed {
     protected:
         void showEvent(QShowEvent *event) override;
 
+    private slots:
+        void switchPage(int index);
+
     private:
         void setupUi();
 
+        QStackedWidget *m_pages = nullptr;
         bool macTitleBarConfigured = false;
     };
 } // Mixed

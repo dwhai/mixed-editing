@@ -6,9 +6,11 @@
 #include "../include/sidebar.h"
 #include "../include/theme.h"
 #include "../include/PlayerPage.h"
+#include "../include/homepage.h"
 
 #include <QHBoxLayout>
 #include <QShowEvent>
+#include <QStackedWidget>
 #include <QWidget>
 
 #ifdef Q_OS_MACOS
@@ -31,8 +33,16 @@ namespace Mixed {
         layout->setContentsMargins(14, 14, 14, 14);
         layout->setSpacing(14);
 
-        layout->addWidget(new Sidebar(root));
-        layout->addWidget(new Player::PlayerPage(root), /*stretch=*/1);
+        auto *sidebar = new Sidebar(root);
+        layout->addWidget(sidebar);
+
+        m_pages = new QStackedWidget(root);
+        m_pages->addWidget(new HomePage(root));
+        m_pages->addWidget(new QWidget(root));
+        m_pages->addWidget(new Player::PlayerPage(root));
+        layout->addWidget(m_pages, 1);
+
+        connect(sidebar, &Sidebar::pageRequested, this, &MainWindow::switchPage);
     }
 
     void MainWindow::showEvent(QShowEvent *event) {
@@ -45,6 +55,12 @@ namespace Mixed {
             configureMacTitleBar(reinterpret_cast<void *>(window()->winId()));
         }
 #endif
+    }
+
+    void MainWindow::switchPage(int index) {
+        if (m_pages && index >= 0 && index < m_pages->count()) {
+            m_pages->setCurrentIndex(index);
+        }
     }
 
     MainWindow::~MainWindow() = default;

@@ -38,7 +38,7 @@ namespace Mixed::Player {
         void uploadTextures();
         void ensureTextures();
 
-        QOpenGLShaderProgram m_program;
+        QOpenGLShaderProgram *m_program = nullptr;
         GLuint m_textures[3] = {0, 0, 0};
         int m_texWidth = 0;
         int m_texHeight = 0;

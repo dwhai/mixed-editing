@@ -7,11 +7,19 @@
 #define MIXEDEDITING_PLAYERTYPES_H
 
 #include <QByteArray>
+#include <QString>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
 
 namespace Mixed::Player {
+
+    // 一条字幕：在 [start, end] 时间区间（秒）内显示 text。
+    struct SubtitleCue {
+        double start = 0.0;
+        double end = 0.0;
+        QString text;
+    };
 
     // 一帧已解码、已转换为 YUV420P（三平面紧凑排列）的视频帧。
     // pts 单位为秒，用于音画同步。

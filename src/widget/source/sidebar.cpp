@@ -8,6 +8,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QStyle>
 #include <QVBoxLayout>
 
 namespace Mixed {
@@ -31,11 +32,25 @@ namespace Mixed {
         layout->addWidget(buildAccountCard());
 
         for (int i = 0; i < kNavItems.size(); ++i) {
-            layout->addWidget(Components::navButton(kNavItems.at(i), /*active=*/i == 0, this));
+            auto *btn = Components::navButton(kNavItems.at(i), /*active=*/i == 0, this);
+            m_navButtons.append(btn);
+            connect(btn, &QPushButton::clicked, this, [this, i]() {
+                updateActiveButton(i);
+                emit pageRequested(i);
+            });
+            layout->addWidget(btn);
         }
 
         layout->addStretch();
         layout->addWidget(buildDiscoverCard());
+    }
+
+    void Sidebar::updateActiveButton(int index) {
+        for (int i = 0; i < m_navButtons.size(); ++i) {
+            m_navButtons[i]->setProperty("role", i == index ? "navActive" : "nav");
+            m_navButtons[i]->style()->unpolish(m_navButtons[i]);
+            m_navButtons[i]->style()->polish(m_navButtons[i]);
+        }
     }
 
     QWidget *Sidebar::buildAccountCard() {

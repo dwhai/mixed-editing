@@ -75,20 +75,37 @@ void main() {
         initializeOpenGLFunctions();
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 
-        if (!m_program.addShaderFromSourceCode(QOpenGLShader::Vertex, kVertexShader)) {
-            qWarning("VideoGLWidget: vertex shader compile failed: %s",
-                     qPrintable(m_program.log()));
-        }
-        if (!m_program.addShaderFromSourceCode(QOpenGLShader::Fragment, kFragmentShader)) {
-            qWarning("VideoGLWidget: fragment shader compile failed: %s",
-                     qPrintable(m_program.log()));
-        }
-        if (!m_program.link()) {
-            qWarning("VideoGLWidget: program link failed: %s", qPrintable(m_program.log()));
+        // 全屏切换会重建 GL 上下文，旧纹理 id 随之失效；这里复位状态，
+        // 并将已有帧标记为待重传，避免切换后画面空白。
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_textures[0] = m_textures[1] = m_textures[2] = 0;
+            m_texWidth = 0;
+            m_texHeight = 0;
+            m_hasFrame = false;
+            if (m_pending.valid()) m_hasPending = true;
         }
 
-        m_vertexAttr = m_program.attributeLocation("aPos");
-        m_texCoordAttr = m_program.attributeLocation("aTexCoord");
+        // 全屏切换会销毁旧上下文并新建上下文。着色器程序与上下文绑定，
+        // 因此每次初始化都重建一个全新的程序对象，避免“重复定义 main”
+        // 以及“program 与 shader 不属于同一上下文”的错误。
+        delete m_program;
+        m_program = new QOpenGLShaderProgram(this);
+
+        if (!m_program->addShaderFromSourceCode(QOpenGLShader::Vertex, kVertexShader)) {
+            qWarning("VideoGLWidget: vertex shader compile failed: %s",
+                     qPrintable(m_program->log()));
+        }
+        if (!m_program->addShaderFromSourceCode(QOpenGLShader::Fragment, kFragmentShader)) {
+            qWarning("VideoGLWidget: fragment shader compile failed: %s",
+                     qPrintable(m_program->log()));
+        }
+        if (!m_program->link()) {
+            qWarning("VideoGLWidget: program link failed: %s", qPrintable(m_program->log()));
+        }
+
+        m_vertexAttr = m_program->attributeLocation("aPos");
+        m_texCoordAttr = m_program->attributeLocation("aTexCoord");
     }
 
     void VideoGLWidget::ensureTextures() {
@@ -154,7 +171,7 @@ void main() {
         glClear(GL_COLOR_BUFFER_BIT);
 
         uploadTextures();
-        if (!m_hasFrame || m_texWidth == 0) {
+        if (!m_hasFrame || m_texWidth == 0 || !m_program || !m_program->isLinked()) {
             return;
         }
 
@@ -186,28 +203,28 @@ void main() {
             1.0f, 0.0f,
         };
 
-        m_program.bind();
+        m_program->bind();
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, m_textures[0]);
-        m_program.setUniformValue("texY", 0);
+        m_program->setUniformValue("texY", 0);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, m_textures[1]);
-        m_program.setUniformValue("texU", 1);
+        m_program->setUniformValue("texU", 1);
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, m_textures[2]);
-        m_program.setUniformValue("texV", 2);
+        m_program->setUniformValue("texV", 2);
 
-        m_program.enableAttributeArray(m_vertexAttr);
-        m_program.setAttributeArray(m_vertexAttr, vertices, 2);
-        m_program.enableAttributeArray(m_texCoordAttr);
-        m_program.setAttributeArray(m_texCoordAttr, texCoords, 2);
+        m_program->enableAttributeArray(m_vertexAttr);
+        m_program->setAttributeArray(m_vertexAttr, vertices, 2);
+        m_program->enableAttributeArray(m_texCoordAttr);
+        m_program->setAttributeArray(m_texCoordAttr, texCoords, 2);
 
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
-        m_program.disableAttributeArray(m_vertexAttr);
-        m_program.disableAttributeArray(m_texCoordAttr);
-        m_program.release();
+        m_program->disableAttributeArray(m_vertexAttr);
+        m_program->disableAttributeArray(m_texCoordAttr);
+        m_program->release();
     }
 
 } // namespace Mixed::Player

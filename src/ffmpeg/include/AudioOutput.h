@@ -30,6 +30,16 @@ namespace Mixed::Player {
         // 以固定格式（S16 交错）启动声卡。解码端需重采样到该格式。
         bool start(int sampleRate = 44100, int channels = 2);
         void stop();
+        void pause();
+        void resume();
+
+        // 设置音量（线性 0.0~1.0）。可在声卡启动前调用，启动时自动套用。
+        void setVolume(qreal volume);
+        qreal volume() const { return m_volume; }
+
+        // 设置倍速（用于主时钟换算）。实际的音频变速由解码端 atempo 滤镜完成，
+        // 这里仅保证主时钟在变速点连续、不跳变。
+        void setSpeed(double speed);
 
         // 由音频解码线程调用，提交一段已重采样的 PCM。
         void enqueue(const AudioFrame &frame);
@@ -67,9 +77,16 @@ namespace Mixed::Player {
         double m_startPts = 0.0;     // 首个写入样本的 PTS
         std::atomic<bool> m_started{false};
 
+        // 主时钟换算锚点：源位置 = m_clockBasePts + (processed - m_clockBaseUSecs)*speed。
+        // 变速时在此锚点处结算已播放部分，保证时钟连续。
+        double m_clockBasePts = 0.0;
+        qint64 m_clockBaseUSecs = 0;
+        double m_speed = 1.0;
+
         int m_sampleRate = 44100;
         int m_channels = 2;
         bool m_running = false;
+        qreal m_volume = 1.0;
     };
 
 } // namespace Mixed::Player

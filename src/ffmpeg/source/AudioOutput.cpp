@@ -44,6 +44,7 @@ namespace Mixed::Player {
 
         m_sink = new QAudioSink(dev, format, this);
         m_sink->setBufferSize(bytesPerSecond() / 5); // ~200ms
+        m_sink->setVolume(m_volume);
 
         m_started = false;
         m_current = AudioFrame{};
@@ -86,6 +87,33 @@ namespace Mixed::Player {
         m_started = false;
     }
 
+    void AudioOutput::setVolume(qreal volume) {
+        m_volume = qBound(0.0, volume, 1.0);
+        if (m_sink) m_sink->setVolume(m_volume);
+    }
+
+    void AudioOutput::setSpeed(double speed) {
+        if (speed <= 0.0) return;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        // 在变速点把已播放部分按旧倍速结算进 base，之后用新倍速推进。
+        if (m_sink && m_started.load()) {
+            const qint64 p = m_sink->processedUSecs();
+            m_clockBasePts += static_cast<double>(p - m_clockBaseUSecs) / 1e6 * m_speed;
+            m_clockBaseUSecs = p;
+        }
+        m_speed = speed;
+    }
+
+    void AudioOutput::pause() {
+        if (m_sink) m_sink->suspend();
+        if (m_feedTimer) m_feedTimer->stop();
+    }
+
+    void AudioOutput::resume() {
+        if (m_sink) m_sink->resume();
+        if (m_feedTimer) m_feedTimer->start();
+    }
+
     void AudioOutput::enqueue(const AudioFrame &frame) {
         if (frame.pcm.isEmpty()) return;
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -119,6 +147,8 @@ namespace Mixed::Player {
                     m_offset = 0;
                     if (!m_started) {
                         m_startPts = m_current.pts;
+                        m_clockBasePts = m_startPts;
+                        m_clockBaseUSecs = m_sink ? m_sink->processedUSecs() : 0;
                         m_started = true;
                     }
                 }
@@ -137,8 +167,9 @@ namespace Mixed::Player {
 
     double AudioOutput::masterClock() const {
         if (!m_sink || !m_started.load()) return 0.0;
-        // processedUSecs：自 start() 起声卡已处理（播放）的微秒数。
-        return m_startPts + static_cast<double>(m_sink->processedUSecs()) / 1e6;
+        // 源位置 = base + 自上次锚点以来已播放真实时长 × 倍速。
+        const qint64 p = m_sink->processedUSecs();
+        return m_clockBasePts + static_cast<double>(p - m_clockBaseUSecs) / 1e6 * m_speed;
     }
 
     double AudioOutput::bufferedSeconds() const {

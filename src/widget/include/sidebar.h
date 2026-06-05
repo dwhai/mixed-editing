@@ -6,6 +6,9 @@
 #define MIXEDEDITING_SIDEBAR_H
 
 #include <QFrame>
+#include <QVector>
+
+class QPushButton;
 
 namespace Mixed {
     class Sidebar : public QFrame {
@@ -14,9 +17,15 @@ namespace Mixed {
     public:
         explicit Sidebar(QWidget *parent = nullptr);
 
+    signals:
+        void pageRequested(int index);
+
     private:
         QWidget *buildAccountCard();
         QWidget *buildDiscoverCard();
+        void updateActiveButton(int index);
+
+        QVector<QPushButton *> m_navButtons;
     };
 } // Mixed
 

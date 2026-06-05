@@ -11,6 +11,7 @@
 #include "../../network/include/VideoAPI.h"
 
 #include <QAction>
+#include <QApplication>
 #include <QCloseEvent>
 #include <QCursor>
 #include <QDateTime>
@@ -19,7 +20,9 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QNetworkAccessManager>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSlider>
@@ -67,16 +70,15 @@ namespace Mixed::Player {
             layoutOverlay();
         });
 
-        connect(m_playPauseButton, &QPushButton::clicked, this, [this] {
-            if (!m_player) return;
-            if (m_player->isPaused()) {
-                m_player->resume();
-                m_playPauseButton->setText(QStringLiteral("⏸"));
-            } else {
-                m_player->pause();
-                m_playPauseButton->setText(QStringLiteral("▶"));
-            }
-        });
+        // 单击/双击判定定时器：单击事件先入队，等过了双击判定窗口仍未收到
+        // 双击才执行播放/暂停；收到双击则取消该定时并切换全屏。
+        m_clickTimer = new QTimer(this);
+        m_clickTimer->setSingleShot(true);
+        m_clickTimer->setInterval(QApplication::doubleClickInterval());
+        connect(m_clickTimer, &QTimer::timeout, this, &PlayerDialog::togglePlayPause);
+
+        connect(m_playPauseButton, &QPushButton::clicked, this,
+                &PlayerDialog::togglePlayPause);
 
         connect(m_prevButton, &QPushButton::clicked, this, [this] {
             if (m_videos.empty()) return;
@@ -163,11 +165,15 @@ namespace Mixed::Player {
 
     QWidget *PlayerDialog::buildTopInfoArea() {
         auto *area = new QWidget(this);
+        // 顶部信息区给足高度，避免右侧作者名+简介被裁剪。
+        area->setMinimumHeight(72);
         auto *layout = new QHBoxLayout(area);
-        layout->setContentsMargins(16, 14, 16, 4);
+        layout->setContentsMargins(16, 14, 16, 8);
+        layout->setSpacing(16);
 
         // 左侧：标题和统计信息（播放量 · 发布时间）。
         auto *leftLayout = new QVBoxLayout();
+        leftLayout->setSpacing(4);
         m_titleLabel = new QLabel(QStringLiteral("视频标题"), area);
         m_titleLabel->setObjectName("videoTitle");
         m_titleLabel->setWordWrap(true);
@@ -180,15 +186,19 @@ namespace Mixed::Player {
 
         layout->addLayout(leftLayout, 7);
 
-        // 右侧：作者信息及简介。
+        // 右侧：作者信息及简介。顶端对齐，简介可换行至多行而不被裁剪。
         auto *rightLayout = new QVBoxLayout();
+        rightLayout->setSpacing(4);
         m_authorLabel = new QLabel(QStringLiteral("作者名称"), area);
         m_authorLabel->setObjectName("authorName");
+        m_authorLabel->setWordWrap(true);
         rightLayout->addWidget(m_authorLabel);
 
         m_authorDescLabel = new QLabel(QStringLiteral("作者简介"), area);
         m_authorDescLabel->setObjectName("authorDesc");
         m_authorDescLabel->setWordWrap(true);
+        // 允许纵向扩展以容纳多行简介，并按内容确定高度。
+        m_authorDescLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
         rightLayout->addWidget(m_authorDescLabel);
         rightLayout->addStretch();
 
@@ -258,13 +268,29 @@ namespace Mixed::Player {
         auto *bar = new QWidget(m_playerContainer);
         bar->setObjectName("playerControlBar");
 
-        auto *layout = new QHBoxLayout(bar);
+        // 控制条整体为纵向：顶部一条细进度条 + 下方按钮行。
+        auto *outer = new QVBoxLayout(bar);
+        outer->setContentsMargins(0, 0, 0, 0);
+        outer->setSpacing(0);
+
+        // 进度条（仅展示当前播放进度，不支持拖动跳转）。
+        m_progressBar = new QProgressBar(bar);
+        m_progressBar->setObjectName("playerProgress");
+        m_progressBar->setRange(0, 1000);
+        m_progressBar->setValue(0);
+        m_progressBar->setTextVisible(false);
+        m_progressBar->setFixedHeight(4);
+        outer->addWidget(m_progressBar);
+
+        auto *row = new QWidget(bar);
+        auto *layout = new QHBoxLayout(row);
         layout->setContentsMargins(14, 0, 14, 0);
         layout->setSpacing(10);
+        outer->addWidget(row);
 
         auto makeIconButton = [&](const QString &glyph, const QString &tip,
                                   bool enabled = true) {
-            auto *btn = new QPushButton(glyph, bar);
+            auto *btn = new QPushButton(glyph, row);
             btn->setObjectName("playerIconButton");
             btn->setToolTip(tip);
             btn->setCursor(Qt::PointingHandCursor);
@@ -273,7 +299,7 @@ namespace Mixed::Player {
             return btn;
         };
         auto makeTextButton = [&](const QString &text, const QString &tip) {
-            auto *btn = new QPushButton(text, bar);
+            auto *btn = new QPushButton(text, row);
             btn->setObjectName("playerTextButton");
             btn->setToolTip(tip);
             btn->setCursor(Qt::PointingHandCursor);
@@ -291,7 +317,7 @@ namespace Mixed::Player {
         m_nextButton = makeIconButton(QStringLiteral("⏭"), QStringLiteral("下一个"), false);
         layout->addWidget(m_nextButton);
 
-        m_timeLabel = new QLabel(QStringLiteral("00:00 / 00:00"), bar);
+        m_timeLabel = new QLabel(QStringLiteral("00:00 / 00:00"), row);
         m_timeLabel->setObjectName("playerTime");
         layout->addWidget(m_timeLabel);
 
@@ -364,8 +390,13 @@ namespace Mixed::Player {
         const QRect vr = videoRect();
         m_video->setGeometry(vr);
 
-        const int barHeight = 48;
-        const int offY = m_playerContainer->height() + 80;
+        // 控制条贴合容器底部、横跨整个容器宽度（而非内缩的视频区域），
+        // 避免画面被上下黑边居中时控制条悬浮在半空、离底部很远。
+        const int progressH = 4;
+        const int rowH = 44;
+        const int barHeight = progressH + rowH;
+        const QRect cr = m_playerContainer->rect();
+        const int offY = cr.height() + 80; // 容器外（被裁剪不可见）
 
         if (m_subtitleLabel) {
             const int subH = 64;
@@ -376,14 +407,14 @@ namespace Mixed::Player {
         }
 
         if (m_status) {
-            const int y = m_controlsVisible ? (vr.bottom() - barHeight - 24) : offY;
-            m_status->setGeometry(vr.x() + 14, y, vr.width() - 28, 20);
+            const int y = m_controlsVisible ? (cr.height() - barHeight - 24) : offY;
+            m_status->setGeometry(cr.x() + 14, y, cr.width() - 28, 20);
             m_status->raise();
         }
 
         if (m_controlBar) {
-            const int y = m_controlsVisible ? (vr.bottom() - barHeight + 1) : offY;
-            m_controlBar->setGeometry(vr.x(), y, vr.width(), barHeight);
+            const int y = m_controlsVisible ? (cr.height() - barHeight) : offY;
+            m_controlBar->setGeometry(cr.x(), y, cr.width(), barHeight);
             m_controlBar->raise();
         }
 
@@ -415,6 +446,17 @@ namespace Mixed::Player {
         if (m_hideTimer) m_hideTimer->start();
     }
 
+    void PlayerDialog::togglePlayPause() {
+        if (!m_player || !m_playPauseButton->isEnabled()) return;
+        if (m_player->isPaused()) {
+            m_player->resume();
+            m_playPauseButton->setText(QStringLiteral("⏸"));
+        } else {
+            m_player->pause();
+            m_playPauseButton->setText(QStringLiteral("▶"));
+        }
+    }
+
     bool PlayerDialog::eventFilter(QObject *watched, QEvent *event) {
         const QEvent::Type t = event->type();
 
@@ -429,6 +471,39 @@ namespace Mixed::Player {
                 showControls();
             } else if (t == QEvent::Leave) {
                 scheduleHideControls();
+            }
+        }
+
+        // 视频画面区域的点击：单击播放/暂停，双击切换全屏。
+        // 仅处理画面控件与容器自身（控制条上的按钮各自消费事件，不会落到这里）。
+        if (watched == m_video || watched == m_playerContainer) {
+            if (t == QEvent::MouseButtonPress) {
+                auto *me = static_cast<QMouseEvent *>(event);
+                if (me->button() == Qt::LeftButton) {
+                    // 必须接受 Press 以建立隐式鼠标抓取，否则后续 Release 不会
+                    // 派发到本控件，单击（播放/暂停）就收不到事件。
+                    return true;
+                }
+            } else if (t == QEvent::MouseButtonRelease) {
+                auto *me = static_cast<QMouseEvent *>(event);
+                if (me->button() == Qt::LeftButton) {
+                    if (m_ignoreNextRelease) {
+                        // 这是双击后补发的 Release，忽略。
+                        m_ignoreNextRelease = false;
+                    } else {
+                        // 先入队单击；若紧接着是双击会被 DblClick 分支取消。
+                        m_clickTimer->start();
+                    }
+                    return true;
+                }
+            } else if (t == QEvent::MouseButtonDblClick) {
+                auto *me = static_cast<QMouseEvent *>(event);
+                if (me->button() == Qt::LeftButton) {
+                    m_clickTimer->stop();      // 取消待执行的单击
+                    m_ignoreNextRelease = true; // 跳过随后补发的 Release
+                    toggleFullscreen();
+                    return true;
+                }
             }
         }
 
@@ -545,7 +620,7 @@ namespace Mixed::Player {
         m_playerContainer->setParent(nullptr);
         m_playerContainer->setWindowFlags(Qt::Window);
         m_playerContainer->setStyleSheet(
-            QStringLiteral("QWidget#playerContainer{background-color:#000000;}"));
+            QStringLiteral("QWidget#playerContainer{background-color:#15171c;}"));
         m_playerContainer->showFullScreen();
         m_playerContainer->setFocus();
 
@@ -593,6 +668,14 @@ namespace Mixed::Player {
             text += QStringLiteral(" / ") + formatTime(duration);
         }
         m_timeLabel->setText(text);
+
+        // 同步底部进度条（range 为 0~1000，按比例换算）。
+        if (m_progressBar && duration > 0) {
+            int value = static_cast<int>((position / duration) * 1000.0);
+            if (value < 0) value = 0;
+            if (value > 1000) value = 1000;
+            m_progressBar->setValue(value);
+        }
     }
 
     QString PlayerDialog::formatTime(double seconds) {
@@ -634,6 +717,7 @@ namespace Mixed::Player {
         m_timeLabel->setText(QStringLiteral("00:00 / %1:%2")
                                  .arg(minutes, 2, 10, QChar('0'))
                                  .arg(seconds, 2, 10, QChar('0')));
+        if (m_progressBar) m_progressBar->setValue(0);
 
         m_subtitleLabel->clear();
         m_subtitleLabel->hide();

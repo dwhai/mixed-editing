@@ -15,6 +15,7 @@
 class QLabel;
 class QPushButton;
 class QSlider;
+class QProgressBar;
 class QHBoxLayout;
 class QVBoxLayout;
 class QTimer;
@@ -60,6 +61,9 @@ namespace Mixed {
             void showControls();
             void scheduleHideControls();
 
+            // 播放控制
+            void togglePlayPause();
+
             // 各功能
             void showQualityMenu();
             void applyQuality(int playInfoIndex);
@@ -80,6 +84,7 @@ namespace Mixed {
             // 播放器容器与悬浮控制条（堆叠布局：控制条覆盖在画面之上）
             QWidget *m_playerContainer = nullptr;
             QWidget *m_controlBar = nullptr;
+            QProgressBar *m_progressBar = nullptr; // 视频底部进度条（仅展示，不支持拖动跳转）
             QLabel *m_subtitleLabel = nullptr;
 
             QPushButton *m_prevButton = nullptr;
@@ -111,6 +116,11 @@ namespace Mixed {
             QHBoxLayout *m_playLayout = nullptr;
 
             QTimer *m_hideTimer = nullptr;
+            // 区分单击/双击：单击延迟到双击判定窗口结束后再执行播放/暂停，
+            // 若期间收到双击则取消单击、改为切换全屏。
+            QTimer *m_clickTimer = nullptr;
+            // 双击后 Qt 还会再补发一次 Release，需忽略以免误触发单击。
+            bool m_ignoreNextRelease = false;
 
             QNetworkAccessManager *m_network = nullptr;
             API::VideoAPI *m_api = nullptr;

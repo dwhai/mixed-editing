@@ -106,8 +106,8 @@ QLabel#draftDate { color: #1a1d24; font-size: 12px; font-weight: 600; }
 QLabel#draftInfo { color: #8b92a3; font-size: 11px; }
 
 /* ---- Player page ---- */
-/* 播放器容器保持深色：视频按宽高比居中铺放，黑色背景衬托画面更自然 */
-QWidget#playerContainer { background-color: #000000; border-radius: 10px; }
+/* 播放器容器用深炭灰而非纯黑：视频按宽高比居中铺放，上下黑边不至于死黑突兀 */
+QWidget#playerContainer { background-color: #15171c; border-radius: 10px; }
 QDialog#playerDialog { background-color: #f4f5f7; }
 QWidget#relatedVideos { border-radius: 12px; background-color: #ffffff; border: 1px solid #e6e8ec; }
 QWidget#relatedContent { background-color: transparent; }
@@ -118,6 +118,12 @@ QLabel#videoTitle { color: #1a1d24; font-size: 18px; font-weight: 650; }
 QLabel#videoStats { color: #8b92a3; font-size: 12px; }
 QLabel#authorName { color: #1a1d24; font-size: 14px; font-weight: 600; }
 QLabel#authorDesc { color: #8b92a3; font-size: 12px; }
+
+/* 视频底部进度条（细线，仅展示进度） */
+QProgressBar#playerProgress {
+    border: none; background-color: rgba(255, 255, 255, 25%);
+}
+QProgressBar#playerProgress::chunk { background-color: #2f6df6; }
 
 /* 悬浮控制条：覆盖在视频画面底部的半透明渐变条（叠在黑色画面上，保持浅色文字） */
 QWidget#playerControlBar {

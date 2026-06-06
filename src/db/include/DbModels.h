@@ -144,6 +144,42 @@ struct Keyframe {
     SyncMeta meta;
 };
 
+// 文字/字幕内容（kind='text' 的 clip 关联，clip_id 作主键）。
+// 注意：text_element 表只有 updated_at/rev（无 created_at/deleted_at），
+// 故此处不用 SyncMeta，单列 updatedAt/rev。
+struct TextElement {
+    QString clipId;
+    QString content;
+    QString fontFamily;
+    double  fontSize = 0.0;
+    QString color;          // '#RRGGBBAA'
+    QString alignment;      // left/center/right
+    QString style;          // JSON
+    qint64  updatedAt = 0;
+    int     rev = 1;
+};
+
+// 导出/渲染任务（本地执行，不参与云同步，故无 deleted_at/rev）。
+struct ExportJob {
+    QString id;
+    QString projectId;
+    QString sequenceId;
+    QString status = QStringLiteral("pending"); // pending/running/done/failed/canceled
+    QString outputPath;
+    QString format = QStringLiteral("mp4");
+    QString videoCodec = QStringLiteral("libx264");
+    QString audioCodec = QStringLiteral("aac");
+    int     width = 0;
+    int     height = 0;
+    double  fps = 0.0;
+    qint64  bitrate = 0;
+    double  progress = 0.0;     // 0~1
+    QString errorMessage;
+    qint64  createdAt = 0;
+    qint64  startedAt = 0;
+    qint64  finishedAt = 0;
+};
+
 } // namespace DB
 } // namespace Mixed
 

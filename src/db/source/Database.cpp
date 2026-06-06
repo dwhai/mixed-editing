@@ -157,8 +157,18 @@ bool Database::migrate() {
         // 按分号切分逐条执行（schema.sql 中无分号字面量，安全）。
         const QStringList statements = sql.split(QChar(';'), Qt::SkipEmptyParts);
         for (const QString& raw : statements) {
-            const QString stmt = raw.trimmed();
-            if (stmt.isEmpty() || stmt.startsWith(QStringLiteral("--"))) {
+            // 逐行剥离 `--` 整行注释：注释常与其下方的 CREATE 语句同处一个分块，
+            // 若按整块判断会把建表语句一起跳过，故必须按行过滤后再拼回。
+            QStringList keep;
+            for (const QString& line : raw.split(QChar('\n'))) {
+                const QString t = line.trimmed();
+                if (t.isEmpty() || t.startsWith(QStringLiteral("--"))) {
+                    continue;
+                }
+                keep << line;
+            }
+            const QString stmt = keep.join(QChar('\n')).trimmed();
+            if (stmt.isEmpty()) {
                 continue;
             }
             QSqlQuery exec(m_db);

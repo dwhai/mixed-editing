@@ -80,6 +80,58 @@ public:
     std::vector<Clip> listByTrack(const QString& trackId);
 };
 
+// 特效：可挂在 clip 或 track 上，按 order_index 组成特效链。
+class EffectRepository : public RepositoryBase {
+public:
+    bool insert(Effect& e);
+    bool update(Effect& e);
+    bool remove(const QString& id);
+
+    // 按 order_index 升序返回某 owner（clip/track）的未删除特效。
+    std::vector<Effect> listByOwner(const QString& ownerType, const QString& ownerId);
+};
+
+// 转场：同一轨道相邻两片段之间。
+class TransitionRepository : public RepositoryBase {
+public:
+    bool insert(Transition& t);
+    bool update(Transition& t);
+    bool remove(const QString& id);
+
+    std::vector<Transition> listByTrack(const QString& trackId);
+};
+
+// 关键帧：对 clip 或 effect 的某属性做动画。
+class KeyframeRepository : public RepositoryBase {
+public:
+    bool insert(Keyframe& k);
+    bool update(Keyframe& k);
+    bool remove(const QString& id);
+
+    // 按 time_offset_us 升序返回某 owner 某属性的未删除关键帧。
+    std::vector<Keyframe> listByOwner(const QString& ownerType, const QString& ownerId,
+                                      const QString& propertyName);
+};
+
+// 文字元素：与 kind='text' 的 clip 一一对应（clip_id 为主键）。
+class TextElementRepository : public RepositoryBase {
+public:
+    // upsert：存在则更新，否则插入。
+    bool save(TextElement& t);
+    bool remove(const QString& clipId);
+    std::optional<TextElement> findByClip(const QString& clipId);
+};
+
+// 导出任务：本地执行，不参与云同步（无 oplog）。
+class ExportJobRepository {
+public:
+    bool insert(ExportJob& j);
+    bool update(ExportJob& j);
+
+    std::optional<ExportJob> findById(const QString& id);
+    std::vector<ExportJob> listByProject(const QString& projectId);
+};
+
 } // namespace DB
 } // namespace Mixed
 

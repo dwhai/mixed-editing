@@ -193,6 +193,22 @@ QPushButton#editorImportButton {
 }
 QPushButton#editorImportButton:hover { background-color: #dbe6fd; }
 QLabel#editorEmptyHint { color: #8b92a3; font-size: 13px; }
+QLabel#editorHintLine { color: #8b92a3; font-size: 11px; }
+
+/* 素材库列表：每项一张卡片，双击添加 / 右键菜单 */
+QListWidget#editorMediaList {
+    border: none; background-color: transparent; outline: none;
+}
+QListWidget#editorMediaList::item {
+    border: 1px solid #e6e8ec; border-radius: 10px;
+    background-color: #f9fafb; color: #1a1d24; font-size: 12px; padding: 10px 12px;
+}
+QListWidget#editorMediaList::item:hover {
+    background-color: #eef2fb; border-color: #c9d6f7;
+}
+QListWidget#editorMediaList::item:selected {
+    background-color: #e8eefc; border-color: #2f6df6; color: #1a1d24;
+}
 
 /* 素材卡片：可点击，点击添加到时间线 */
 QPushButton#editorAssetCard {
@@ -201,23 +217,23 @@ QPushButton#editorAssetCard {
 }
 QPushButton#editorAssetCard:hover { background-color: #eef2fb; border-color: #c9d6f7; }
 
-/* 中间预览区：深炭灰底，视频画面居中铺放 */
+/* 中间预览区：深炭灰底，合成画面由 VideoGLWidget 渲染 */
 QFrame#editorPreviewArea { border-radius: 14px; background-color: #15171c; }
-QLabel#editorPreviewCanvas { color: #5a6172; font-size: 14px; }
 
-/* 底部时间线 */
+/* 顶栏逐帧按钮与时间码 */
+QPushButton#editorStepButton {
+    border: none; border-radius: 6px; color: #5a6172;
+    background-color: #eef0f4; font-size: 12px; padding: 6px 10px;
+}
+QPushButton#editorStepButton:hover { background-color: #e2e5ea; color: #1a1d24; }
+QLabel#editorTimecode {
+    color: #1a1d24; font-size: 13px; font-weight: 600;
+    background-color: #f4f5f7; border-radius: 6px; padding: 6px 10px;
+}
+
+/* 底部时间线容器（时间线本体 TimelineView 为自绘控件） */
 QFrame#editorTimeline { background-color: #ffffff; border-top: 1px solid #e6e8ec; }
-QLabel#editorTimelineHint {
-    color: #8b92a3; font-size: 13px;
-    background-color: #f4f5f7; border: 1px dashed #d7dae0; border-radius: 10px;
-}
-/* 时间线轨道行与片段块 */
-QFrame#editorTrackRow { background-color: #f4f5f7; border-radius: 8px; }
-QLabel#editorTrackLabel { color: #5a6172; font-size: 12px; font-weight: 600; }
-QLabel#editorClipBlock {
-    color: #ffffff; font-size: 11px; font-weight: 600;
-    background-color: #2f6df6; border-radius: 6px; padding: 10px 4px;
-}
+QScrollArea#editorTimelineScroll { background-color: transparent; }
 )");
     }
 }

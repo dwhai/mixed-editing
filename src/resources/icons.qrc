@@ -4,4 +4,7 @@
         <file>icons/message.svg</file>
         <file>icons/settings.svg</file>
     </qresource>
+    <qresource prefix="/db">
+        <file alias="schema.sql">db/schema.sql</file>
+    </qresource>
 </RCC>

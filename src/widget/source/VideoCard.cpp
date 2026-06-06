@@ -98,15 +98,6 @@ namespace Mixed {
         layout->addWidget(authorLabel);
 
         // 优先使用 detail 封面（列表项主封面），回退到 feed。
-        // 打印 cover 结构体各字段，便于排查“数据为空”还是“显示问题”。
-        qInfo().noquote() << QStringLiteral("[VideoCard #%1] cover{")
-                                 .arg(index)
-                          << "detail=" << QString::fromStdString(video.cover.detail)
-                          << "| feed=" << QString::fromStdString(video.cover.feed)
-                          << "| blurred=" << QString::fromStdString(video.cover.blurred)
-                          << "| homepage=" << QString::fromStdString(video.cover.homepage)
-                          << "}";
-
         QString cover = QString::fromStdString(video.cover.detail);
         if (cover.isEmpty()) cover = QString::fromStdString(video.cover.feed);
         if (!cover.isEmpty()) {
@@ -167,10 +158,10 @@ namespace Mixed {
             const QByteArray data = reply->readAll();
             QPixmap pix = decodeImage(data);
             if (!pix.isNull()) {
-                qInfo().noquote()
-                    << QStringLiteral("[VideoCard #%1] 封面加载成功 status=%2 bytes=%3 size=%4x%5")
-                           .arg(m_index).arg(status).arg(data.size())
-                           .arg(pix.width()).arg(pix.height());
+                // qInfo().noquote()
+                //     << QStringLiteral("[VideoCard #%1] 封面加载成功 status=%2 bytes=%3 size=%4x%5")
+                //            .arg(m_index).arg(status).arg(data.size())
+                //            .arg(pix.width()).arg(pix.height());
                 QPixmapCache::insert(url, pix);
                 m_source = pix;
                 updateThumbnail();

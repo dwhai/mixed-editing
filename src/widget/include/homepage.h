@@ -14,6 +14,10 @@ namespace Mixed {
     public:
         explicit HomePage(QWidget *parent = nullptr);
 
+    signals:
+        // 「开始创作」被点击，请求打开剪辑工作区。
+        void createRequested();
+
     private:
         QWidget *buildBanner();
     };

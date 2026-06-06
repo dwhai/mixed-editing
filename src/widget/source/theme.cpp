@@ -166,6 +166,58 @@ QSlider#volumeSlider::add-page:vertical { background: #8fd2ff; border-radius: 2p
 QSlider#volumeSlider::handle:vertical {
     height: 12px; width: 12px; margin: 0 -5px; border-radius: 6px; background: #eef4ff;
 }
+
+/* ---- 剪辑工作区 (EditorWindow) ---- */
+QWidget#editorRoot { background-color: #f4f5f7; }
+
+/* 顶部操作栏 */
+QFrame#editorTopBar { background-color: #ffffff; border-bottom: 1px solid #e6e8ec; }
+QLabel#editorProjectTitle { color: #1a1d24; font-size: 14px; font-weight: 600; }
+QPushButton#editorBackButton {
+    border: none; border-radius: 8px; color: #5a6172;
+    background-color: #eef0f4; font-size: 13px; padding: 7px 16px;
+}
+QPushButton#editorBackButton:hover { background-color: #e2e5ea; color: #1a1d24; }
+QPushButton#editorExportButton {
+    border: none; border-radius: 8px; color: #ffffff;
+    background-color: #2f6df6; font-size: 13px; font-weight: 600; padding: 7px 20px;
+}
+QPushButton#editorExportButton:hover { background-color: #4b82f8; }
+
+/* 左侧素材库 */
+QFrame#editorMediaPanel { border-radius: 14px; background-color: #ffffff; border: 1px solid #e6e8ec; }
+QLabel#editorPanelTitle { color: #1a1d24; font-size: 15px; font-weight: 600; }
+QPushButton#editorImportButton {
+    border: none; border-radius: 8px; color: #2f6df6;
+    background-color: #e8eefc; font-size: 13px; font-weight: 600; padding: 9px 12px;
+}
+QPushButton#editorImportButton:hover { background-color: #dbe6fd; }
+QLabel#editorEmptyHint { color: #8b92a3; font-size: 13px; }
+
+/* 素材卡片：可点击，点击添加到时间线 */
+QPushButton#editorAssetCard {
+    text-align: left; border: 1px solid #e6e8ec; border-radius: 10px;
+    background-color: #f9fafb; color: #1a1d24; font-size: 12px; padding: 10px 12px;
+}
+QPushButton#editorAssetCard:hover { background-color: #eef2fb; border-color: #c9d6f7; }
+
+/* 中间预览区：深炭灰底，视频画面居中铺放 */
+QFrame#editorPreviewArea { border-radius: 14px; background-color: #15171c; }
+QLabel#editorPreviewCanvas { color: #5a6172; font-size: 14px; }
+
+/* 底部时间线 */
+QFrame#editorTimeline { background-color: #ffffff; border-top: 1px solid #e6e8ec; }
+QLabel#editorTimelineHint {
+    color: #8b92a3; font-size: 13px;
+    background-color: #f4f5f7; border: 1px dashed #d7dae0; border-radius: 10px;
+}
+/* 时间线轨道行与片段块 */
+QFrame#editorTrackRow { background-color: #f4f5f7; border-radius: 8px; }
+QLabel#editorTrackLabel { color: #5a6172; font-size: 12px; font-weight: 600; }
+QLabel#editorClipBlock {
+    color: #ffffff; font-size: 11px; font-weight: 600;
+    background-color: #2f6df6; border-radius: 6px; padding: 10px 4px;
+}
 )");
     }
 }

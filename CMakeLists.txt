@@ -16,6 +16,7 @@ find_package(Qt6 COMPONENTS
         Multimedia
         OpenGL
         OpenGLWidgets
+        Sql
         REQUIRED)
 
 # 查找 FFmpeg 7
@@ -40,12 +41,14 @@ file(GLOB_RECURSE SOURCES
         "src/widget/source/*.cpp"
         "src/ffmpeg/source/*.cpp"
         "src/network/source/*.cpp"
+        "src/db/source/*.cpp"
 )
 
 file(GLOB_RECURSE HEADERS
         "src/widget/include/*.h"
         "src/ffmpeg/include/*.h"
         "src/network/include/*.h"
+        "src/db/include/*.h"
 )
 
 # 资源文件
@@ -64,6 +67,7 @@ target_include_directories(MixedEditing PRIVATE
         ${FFMPEG_INCLUDE_DIRS}
         ${WEBP_INCLUDE_DIRS}
         ${CMAKE_SOURCE_DIR}/src/ffmpeg/include
+        ${CMAKE_SOURCE_DIR}/src/db/include
 )
 
 if(APPLE)
@@ -82,6 +86,7 @@ target_link_libraries(MixedEditing
         Qt::Multimedia
         Qt::OpenGL
         Qt::OpenGLWidgets
+        Qt::Sql
         ${FFMPEG_LINK_LIBRARIES}
         ${WEBP_LINK_LIBRARIES}
 )

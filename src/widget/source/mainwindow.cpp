@@ -7,6 +7,7 @@
 #include "../include/theme.h"
 #include "../include/VideoListPage.h"
 #include "../include/homepage.h"
+#include "../include/EditorWindow.h"
 
 #include <QShowEvent>
 #include <QStackedWidget>
@@ -39,11 +40,31 @@ namespace Mixed {
 
         m_pages = new QStackedWidget(root);
         m_pages->addWidget(new VideoListPage(root));   // 0 短剧（视频列表网格）
-        m_pages->addWidget(new HomePage(root));        // 1 剪辑
+        auto *homePage = new HomePage(root);
+        m_pages->addWidget(homePage);                  // 1 剪辑
         m_pages->addWidget(new QWidget(root));         // 2 模板（占位）
         layout->addWidget(m_pages, 1);
 
         connect(topBar, &TopBar::pageRequested, this, &MainWindow::switchPage);
+        connect(homePage, &HomePage::createRequested, this, &MainWindow::openEditor);
+    }
+
+    void MainWindow::openEditor() {
+        if (!m_editor) {
+            m_editor = new EditorWindow();
+            // 编辑器关闭后恢复主窗口。
+            connect(m_editor, &EditorWindow::closed, this, &MainWindow::onEditorClosed);
+        }
+        hide();
+        m_editor->show();
+        m_editor->raise();
+        m_editor->activateWindow();
+    }
+
+    void MainWindow::onEditorClosed() {
+        show();
+        raise();
+        activateWindow();
     }
 
     void MainWindow::showEvent(QShowEvent *event) {

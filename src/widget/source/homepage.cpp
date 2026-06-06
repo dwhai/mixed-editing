@@ -46,6 +46,7 @@ namespace Mixed {
         auto *start = new QPushButton(QStringLiteral("+  开始创作"), banner);
         start->setObjectName("startButton");
         start->setCursor(Qt::PointingHandCursor);
+        connect(start, &QPushButton::clicked, this, &HomePage::createRequested);
 
         layout->addStretch();
         layout->addWidget(start);

@@ -1,5 +1,6 @@
 #include <QApplication>
 #include "src/widget/include/mainwindow.h"
+#include "src/db/include/Database.h"
 #include <QScreen>
 #include <QRect>
 #include <QStyleHints>
@@ -9,6 +10,10 @@ int main(int argc, char *argv[]) {
     QApplication a(argc, argv);
     a.setApplicationName("Mixed");
     QApplication::styleHints()->setColorScheme(Qt::ColorScheme::Light);
+
+    // 打开剪辑数据层（WAL + 迁移），失败不阻断启动，仅记录告警。
+    DB::Database::instance().open();
+
     MainWindow w;
     w.resize(1280, 760);
     

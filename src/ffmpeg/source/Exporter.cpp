@@ -20,6 +20,7 @@
 #include "../include/Exporter.h"
 #include "../include/CompositionEngine.h"
 #include "../include/PlayerTypes.h"
+#include "../include/AudioMix.h"
 
 #include <QFile>
 #include <algorithm>
@@ -43,9 +44,7 @@ extern "C" {
 namespace Mixed::Player {
 
     namespace {
-        constexpr int    kAudioRate = 48000;   // 导出音频采样率
-        constexpr int    kAudioCh   = 2;       // 立体声
-        constexpr qint64 kUsPerSec  = 1'000'000;
+        // 音频混流目标格式常量在 AudioMix.h 中定义（kAudioRate/kAudioCh/kUsPerSec）。
 
         // 每段视频包队列的内存预算：总预算 / 段数 ≈ 每队列可缓冲的包数上限。
         // 预算内各段编码器全速并行；超出则在 push 处背压，等 muxer 消费腾出空间。
@@ -56,7 +55,7 @@ namespace Mixed::Player {
         // ---- 编码器选择/配置（与旧版一致） ----
 
         // 选择 H.264 编码器：优先硬件 VideoToolbox（macOS 媒体引擎），回退 libx264。
-        const char *pickH264Encoder(int W, int H, int FPS, bool &hwOut) {
+        const char *pickH264Encoder(int W, int H, int FPS, int bitrate, bool &hwOut) {
             const char *vt = "h264_videotoolbox";
             const AVCodec *c = avcodec_find_encoder_by_name(vt);
             if (c) {
@@ -65,7 +64,7 @@ namespace Mixed::Player {
                     probe->width = W; probe->height = H;
                     probe->time_base = AVRational{1, FPS};
                     probe->pix_fmt = AV_PIX_FMT_YUV420P;
-                    probe->bit_rate = 6'000'000;
+                    probe->bit_rate = bitrate;
                     probe->color_range = AVCOL_RANGE_MPEG;  // 与真实编码条件一致
                     av_opt_set(probe->priv_data, "allow_sw", "1", 0);
                     const bool okOpen = avcodec_open2(probe, c, nullptr) >= 0;
@@ -79,7 +78,7 @@ namespace Mixed::Player {
 
         // 配置并打开一个 H.264 编码器上下文。
         AVCodecContext *openH264Encoder(const char *name, bool hardware,
-                                        int W, int H, int FPS, int threadCount,
+                                        int W, int H, int FPS, int bitrate, int threadCount,
                                         bool globalHeader) {
             const AVCodec *codec = avcodec_find_encoder_by_name(name);
             if (!codec) return nullptr;
@@ -90,7 +89,7 @@ namespace Mixed::Player {
             ctx->time_base = AVRational{1, FPS};
             ctx->framerate = AVRational{FPS, 1};
             ctx->pix_fmt = AV_PIX_FMT_YUV420P;
-            ctx->bit_rate = 6'000'000;
+            ctx->bit_rate = bitrate;
             ctx->gop_size = FPS;
             ctx->max_b_frames = 0;   // 无 B 帧：muxer 重写 pts 时 pts==dts，顺序简单
             // 显式标注色彩元数据：limited(MPEG) range + BT.709（HD 标准）。
@@ -136,131 +135,6 @@ namespace Mixed::Player {
             vf->pts = pts;
         }
 
-        // ---- 音频：单个时间区间的并行混音 ----
-
-        // 把 [startSample,endSample) 范围内、与该区间重叠的所有音频片段混进 out。
-        // out 为该区间的交错 float 立体声缓冲（长度 = (end-start)*kAudioCh）。
-        // 各 worker 只写自己区间的 out，互不重叠，无需加锁。
-        void mixAudioRange(const Exporter::Request &req,
-                           qint64 startSample, qint64 endSample,
-                           std::vector<float> &out,
-                           std::atomic<bool> &cancelled) {
-            const qint64 rangeSamples = endSample - startSample;
-            if (rangeSamples <= 0) return;
-            out.assign(static_cast<size_t>(rangeSamples) * kAudioCh, 0.0f);
-
-            // 区间在时间线上的微秒范围（用于裁剪片段）。
-            const qint64 rangeStartUs = startSample * kUsPerSec / kAudioRate;
-            const qint64 rangeEndUs   = endSample   * kUsPerSec / kAudioRate;
-
-            for (const DB::Track &track : req.tracks) {
-                if (track.trackType != QStringLiteral("audio")) continue;
-                auto clipsIt = req.clipsByTrack.constFind(track.id);
-                if (clipsIt == req.clipsByTrack.constEnd()) continue;
-
-                for (const DB::Clip &clip : clipsIt.value()) {
-                    if (cancelled.load()) return;
-                    // 片段在时间线上的覆盖范围；与本区间无交集则跳过。
-                    const qint64 clipTlStart = clip.timelineStartUs;
-                    const qint64 clipTlEnd   = clip.timelineStartUs +
-                                               (clip.sourceOutUs - clip.sourceInUs);
-                    if (clipTlEnd <= rangeStartUs || clipTlStart >= rangeEndUs) continue;
-
-                    auto pathIt = req.assetPathByClip.constFind(clip.id);
-                    if (pathIt == req.assetPathByClip.constEnd() || pathIt.value().isEmpty()) continue;
-                    const QByteArray path = pathIt.value().toUtf8();
-
-                    AVFormatContext *fmt = nullptr;
-                    if (avformat_open_input(&fmt, path.constData(), nullptr, nullptr) != 0) continue;
-                    if (avformat_find_stream_info(fmt, nullptr) < 0) { avformat_close_input(&fmt); continue; }
-
-                    int aIdx = -1;
-                    for (unsigned i = 0; i < fmt->nb_streams; ++i)
-                        if (fmt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) { aIdx = (int)i; break; }
-                    if (aIdx < 0) { avformat_close_input(&fmt); continue; }
-
-                    AVStream *st = fmt->streams[aIdx];
-                    const AVCodec *dec = avcodec_find_decoder(st->codecpar->codec_id);
-                    AVCodecContext *ctx = dec ? avcodec_alloc_context3(dec) : nullptr;
-                    if (!ctx || avcodec_parameters_to_context(ctx, st->codecpar) < 0 ||
-                        avcodec_open2(ctx, dec, nullptr) < 0) {
-                        if (ctx) avcodec_free_context(&ctx);
-                        avformat_close_input(&fmt);
-                        continue;
-                    }
-
-                    SwrContext *swr = nullptr;
-                    AVChannelLayout outLayout;
-                    av_channel_layout_default(&outLayout, kAudioCh);
-                    swr_alloc_set_opts2(&swr, &outLayout, AV_SAMPLE_FMT_FLT, kAudioRate,
-                                        &ctx->ch_layout, ctx->sample_fmt, ctx->sample_rate, 0, nullptr);
-                    if (!swr || swr_init(swr) < 0) {
-                        if (swr) swr_free(&swr);
-                        av_channel_layout_uninit(&outLayout);
-                        avcodec_free_context(&ctx);
-                        avformat_close_input(&fmt);
-                        continue;
-                    }
-
-                    // seek 到「本区间起点对应的源内位置」与片段源起点的较大者，
-                    // 避免每段都从片段头解码（区间靠后时浪费）。
-                    const qint64 clipSrcForRange = clip.sourceInUs +
-                        std::max<qint64>(0, rangeStartUs - clipTlStart);
-                    const int64_t seekTs = av_rescale_q(clipSrcForRange,
-                        AVRational{1, 1000000}, st->time_base);
-                    av_seek_frame(fmt, aIdx, seekTs, AVSEEK_FLAG_BACKWARD);
-                    avcodec_flush_buffers(ctx);
-
-                    AVPacket *pkt = av_packet_alloc();
-                    AVFrame *frame = av_frame_alloc();
-                    std::vector<float> tmp;
-                    bool done = false;
-
-                    while (!done && av_read_frame(fmt, pkt) >= 0) {
-                        if (pkt->stream_index == aIdx && avcodec_send_packet(ctx, pkt) == 0) {
-                            while (avcodec_receive_frame(ctx, frame) == 0) {
-                                if (cancelled.load()) { done = true; break; }
-                                const int64_t bestPts = (frame->best_effort_timestamp != AV_NOPTS_VALUE)
-                                    ? frame->best_effort_timestamp : frame->pts;
-                                const qint64 framePtsUs = (bestPts == AV_NOPTS_VALUE) ? clip.sourceInUs
-                                    : av_rescale_q(bestPts, st->time_base, AVRational{1, 1000000});
-                                if (framePtsUs >= clip.sourceOutUs) { done = true; break; }
-
-                                const int maxOut = swr_get_out_samples(swr, frame->nb_samples);
-                                tmp.resize(static_cast<size_t>(std::max(0, maxOut)) * kAudioCh);
-                                uint8_t *outPtr = reinterpret_cast<uint8_t *>(tmp.data());
-                                const int got = swr_convert(swr, &outPtr, maxOut,
-                                    const_cast<const uint8_t **>(frame->data), frame->nb_samples);
-
-                                // 该帧首样本在时间线上的绝对样本号。
-                                const qint64 srcOffUs = framePtsUs - clip.sourceInUs;
-                                const qint64 tlUs = clip.timelineStartUs + srcOffUs;
-                                const qint64 absStart = static_cast<qint64>(
-                                    std::llround(tlUs / 1'000'000.0 * kAudioRate));
-
-                                for (int s = 0; s < got; ++s) {
-                                    const qint64 abs = absStart + s;
-                                    if (abs < startSample || abs >= endSample) continue;
-                                    const qint64 local = abs - startSample;  // 写进本区间偏移
-                                    out[static_cast<size_t>(local) * kAudioCh + 0] += tmp[s * kAudioCh + 0];
-                                    out[static_cast<size_t>(local) * kAudioCh + 1] += tmp[s * kAudioCh + 1];
-                                }
-                                // 已越过本区间右界则可提前结束该片段解码。
-                                if (absStart > endSample) { done = true; break; }
-                            }
-                        }
-                        av_packet_unref(pkt);
-                    }
-
-                    av_frame_free(&frame);
-                    av_packet_free(&pkt);
-                    swr_free(&swr);
-                    av_channel_layout_uninit(&outLayout);
-                    avcodec_free_context(&ctx);
-                    avformat_close_input(&fmt);
-                }
-            }
-        }
     } // namespace
 
     Exporter::Exporter(QObject *parent) : QObject(parent) {}
@@ -286,6 +160,7 @@ namespace Mixed::Player {
         const int W = req.width > 0 ? req.width : 1920;
         const int H = req.height > 0 ? req.height : 1080;
         const int FPS = req.fps > 0 ? req.fps : 30;
+        const int bitrate = req.videoBitrate > 0 ? req.videoBitrate : 6'000'000;
         const qint64 totalFrames =
             std::max<qint64>(1, static_cast<qint64>(std::ceil(req.durationUs / 1'000'000.0 * FPS)));
 
@@ -296,6 +171,9 @@ namespace Mixed::Player {
         std::unordered_map<QString, QString> pathMap;
         for (auto it = req.assetPathByClip.constBegin(); it != req.assetPathByClip.constEnd(); ++it)
             pathMap.emplace(it.key(), it.value());
+
+        // 音频混流快照（供并行混音 worker 复用，AudioMix 内核接收此结构）。
+        AudioMixSource amSrc{req.tracks, req.clipsByTrack, req.assetPathByClip};
 
         // 是否存在音频片段。
         bool hasAudio = false;
@@ -308,7 +186,7 @@ namespace Mixed::Player {
 
         // 编码器选择 + 并行度（与旧版同策略）。
         bool hardware = false;
-        const char *encName = pickH264Encoder(W, H, FPS, hardware);
+        const char *encName = pickH264Encoder(W, H, FPS, bitrate, hardware);
         unsigned hw = std::thread::hardware_concurrency();
         const int cores = static_cast<int>(hw == 0 ? 4 : hw);
         int poolSize = hardware ? std::clamp(cores, 1, 8) : std::clamp(cores / 2, 1, 4);
@@ -324,7 +202,7 @@ namespace Mixed::Player {
         const bool globalHeader = (oc->oformat->flags & AVFMT_GLOBALHEADER) != 0;
 
         // 视频流参数：用一个「参数探测编码器」打开一次以拿到 extradata(SPS/PPS)。
-        AVCodecContext *vparam = openH264Encoder(encName, hardware, W, H, FPS, perThreads, globalHeader);
+        AVCodecContext *vparam = openH264Encoder(encName, hardware, W, H, FPS, bitrate, perThreads, globalHeader);
         if (!vparam) { avformat_free_context(oc); fail(QStringLiteral("无法初始化视频编码器。")); return; }
         AVStream *vst = avformat_new_stream(oc, nullptr);
         avcodec_parameters_from_context(vst->codecpar, vparam);
@@ -403,7 +281,7 @@ namespace Mixed::Player {
             ThreadSafeQueue<QPkt> &q = *vQueues[k];
 
             AVCodecContext *vctx = openH264Encoder(encName, hardware, W, H, FPS,
-                                                   perThreads, globalHeader);
+                                                   bitrate, perThreads, globalHeader);
             if (!vctx) { q.push(QPkt{nullptr, 0.0, true}); return false; }
 
             CompositionEngine engine;
@@ -468,7 +346,7 @@ namespace Mixed::Player {
                 const qint64 e = std::min(s + perRange, totalSamples);
                 mixFuts.push_back(std::async(std::launch::async, [&, s, e]() {
                     std::vector<float> buf;
-                    mixAudioRange(req, s, e, buf, m_cancelled);
+                    mixAudioRange(amSrc, s, e, buf, m_cancelled);
                     return buf;
                 }));
             }

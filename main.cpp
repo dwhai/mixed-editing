@@ -16,7 +16,8 @@ int main(int argc, char *argv[]) {
 
     MainWindow w;
     w.resize(1280, 760);
-    
+    // 设置窗口图标
+    w.setWindowIcon(QIcon(":/icon.png"));
     // 居中显示窗口
     QScreen *screen = QGuiApplication::primaryScreen();
     QRect screenGeometry = screen->availableGeometry();

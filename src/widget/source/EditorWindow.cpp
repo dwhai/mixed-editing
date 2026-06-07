@@ -7,13 +7,18 @@
 #include "../include/theme.h"
 #include "../include/TimelineView.h"
 #include "../include/VideoGLWidget.h"
+#include "../include/ExportDialog.h"
+#include "../include/ExportQueueManager.h"
+#include "../include/ExportQueuePanel.h"
 
 #include "../../db/include/Database.h"
 #include "../../ffmpeg/include/MediaProbe.h"
 #include "../../ffmpeg/include/CompositionEngine.h"
 #include "../../ffmpeg/include/Exporter.h"
+#include "../../ffmpeg/include/PlaybackController.h"
 
 #include <QCloseEvent>
+#include <QDateTime>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFrame>
@@ -28,6 +33,7 @@
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSettings>
 #include <QSqlQuery>
 #include <QStringList>
 #include <QThread>
@@ -296,7 +302,30 @@ namespace Mixed {
                 this, &EditorWindow::onWaveformReady, Qt::QueuedConnection);
         m_thumbThread->start();
 
+        // 实时播放控制器：自带独立合成引擎 + 音频输出。帧/位置/结束信号回主线程。
+        m_playback = new Player::PlaybackController(this);
+        connect(m_playback, &Player::PlaybackController::frameReady, this,
+                [this](const Player::VideoFrame &f) {
+                    if (m_preview && f.valid()) m_preview->setFrame(f);
+                });
+        connect(m_playback, &Player::PlaybackController::positionChanged,
+                this, &EditorWindow::onPlaybackPosition);
+        connect(m_playback, &Player::PlaybackController::reachedEnd,
+                this, &EditorWindow::onPlaybackEnded);
+
         setupUi();
+
+        // 导出队列管理器（非阻塞 + 多任务）。jobAdded/jobUpdated 驱动面板。
+        m_exportQueue = new ExportQueueManager(this);
+        if (m_exportPanel) {
+            connect(m_exportQueue, &ExportQueueManager::jobAdded,
+                    m_exportPanel, &ExportQueuePanel::onJobAdded);
+            connect(m_exportQueue, &ExportQueueManager::jobUpdated,
+                    m_exportPanel, &ExportQueuePanel::onJobUpdated);
+            connect(m_exportPanel, &ExportQueuePanel::cancelRequested,
+                    m_exportQueue, &ExportQueueManager::cancelJob);
+        }
+
         // 进入编辑器即尝试加载上次的工程（仅加载不创建），恢复工作空间；
         // 没有任何已有工程时渲染空时间线占位，等首次导入/添加再落库建工程。
         if (!loadExistingProject()) {
@@ -349,6 +378,13 @@ namespace Mixed {
         prevFrame->setToolTip(QStringLiteral("上一帧"));
         connect(prevFrame, &QPushButton::clicked, this, [this]() { stepFrame(-1); });
 
+        // 播放 / 暂停。
+        m_playButton = new QPushButton(QStringLiteral("▶"), bar);
+        m_playButton->setObjectName("editorPlayButton");
+        m_playButton->setCursor(Qt::PointingHandCursor);
+        m_playButton->setToolTip(QStringLiteral("播放 / 暂停"));
+        connect(m_playButton, &QPushButton::clicked, this, &EditorWindow::togglePlayback);
+
         m_timecodeLabel = new QLabel(formatTimecode(0), bar);
         m_timecodeLabel->setObjectName("editorTimecode");
 
@@ -357,6 +393,20 @@ namespace Mixed {
         nextFrame->setCursor(Qt::PointingHandCursor);
         nextFrame->setToolTip(QStringLiteral("下一帧"));
         connect(nextFrame, &QPushButton::clicked, this, [this]() { stepFrame(1); });
+
+        // 分割（在播放头处切开选中片段）。
+        auto *splitBtn = new QPushButton(QStringLiteral("分割"), bar);
+        splitBtn->setObjectName("editorStepButton");
+        splitBtn->setCursor(Qt::PointingHandCursor);
+        splitBtn->setToolTip(QStringLiteral("在播放头处分割选中片段"));
+        connect(splitBtn, &QPushButton::clicked, this, &EditorWindow::splitSelectedAtPlayhead);
+
+        // 紧凑排列（消除各轨片段间隙：多视频合并到一轨）。
+        auto *compactBtn = new QPushButton(QStringLiteral("紧凑排列"), bar);
+        compactBtn->setObjectName("editorStepButton");
+        compactBtn->setCursor(Qt::PointingHandCursor);
+        compactBtn->setToolTip(QStringLiteral("消除片段间隙，使各轨片段首尾相接"));
+        connect(compactBtn, &QPushButton::clicked, this, &EditorWindow::compactTracks);
 
         auto *exportBtn = new QPushButton(QStringLiteral("导出"), bar);
         exportBtn->setObjectName("editorExportButton");
@@ -368,8 +418,12 @@ namespace Mixed {
         layout->addWidget(m_projectTitle);
         layout->addSpacing(16);
         layout->addWidget(prevFrame);
+        layout->addWidget(m_playButton);
         layout->addWidget(m_timecodeLabel);
         layout->addWidget(nextFrame);
+        layout->addSpacing(12);
+        layout->addWidget(splitBtn);
+        layout->addWidget(compactBtn);
         layout->addStretch();
         layout->addWidget(exportBtn);
         return bar;
@@ -403,7 +457,7 @@ namespace Mixed {
         m_mediaList->setObjectName("editorMediaList");
         m_mediaList->setFrameShape(QFrame::NoFrame);
         m_mediaList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        m_mediaList->setSelectionMode(QAbstractItemView::SingleSelection);
+        m_mediaList->setSelectionMode(QAbstractItemView::ExtendedSelection);
         m_mediaList->setContextMenuPolicy(Qt::CustomContextMenu);
         m_mediaList->setSpacing(4);
 
@@ -479,9 +533,17 @@ namespace Mixed {
         });
         connect(m_timeline, &TimelineView::clipMoved, this, &EditorWindow::moveClip);
         connect(m_timeline, &TimelineView::clipDeleteRequested, this, &EditorWindow::deleteClip);
+        connect(m_timeline, &TimelineView::clipRippleDeleteRequested,
+                this, &EditorWindow::rippleDeleteClip);
+        connect(m_timeline, &TimelineView::clipTrimmed, this, &EditorWindow::trimClip);
+        connect(m_timeline, &TimelineView::clipSplitRequested, this, &EditorWindow::splitClipAt);
         scroll->setWidget(m_timeline);
 
         layout->addWidget(scroll, /*stretch=*/1);
+
+        // 导出队列面板（非阻塞）：停靠时间线底部，空队列时隐藏。
+        m_exportPanel = new ExportQueuePanel(timeline);
+        layout->addWidget(m_exportPanel);
         return timeline;
     }
 
@@ -590,13 +652,20 @@ namespace Mixed {
     }
 
     void EditorWindow::importMedia() {
+        // 起始目录记忆：默认打开上次导入所在目录（QSettings）。
+        QSettings settings(QStringLiteral("MixedEditing"), QStringLiteral("MixedEditing"));
+        const QString lastDir =
+            settings.value(QStringLiteral("paths/lastImportDir")).toString();
         const QStringList files = QFileDialog::getOpenFileNames(
-            this, QStringLiteral("导入素材"), QString(),
+            this, QStringLiteral("导入素材"), lastDir,
             QStringLiteral("媒体文件 (*.mp4 *.mov *.mkv *.avi *.flv *.mp3 *.wav *.aac *.m4a "
                            "*.jpg *.jpeg *.png *.webp);;所有文件 (*)"));
         if (files.isEmpty()) {
             return;
         }
+        // 记忆本次导入目录（取首个文件所在目录）。
+        settings.setValue(QStringLiteral("paths/lastImportDir"),
+                          QFileInfo(files.first()).absolutePath());
 
         // 首次导入时才真正创建工程。
         ensureProject();
@@ -740,14 +809,23 @@ namespace Mixed {
 
     void EditorWindow::showMediaContextMenu(const DB::MediaAsset &asset,
                                             const QPoint &globalPos) {
+        const int selCount = m_mediaList ? m_mediaList->selectedItems().size() : 1;
+
         QMenu menu(this);
         QAction *addAct = menu.addAction(QStringLiteral("添加到操作空间（时间线）"));
+        QAction *batchAct = nullptr;
+        if (selCount > 1) {
+            batchAct = menu.addAction(
+                QStringLiteral("批量添加选中 %1 项到时间线").arg(selCount));
+        }
         menu.addSeparator();
         QAction *delAct = menu.addAction(QStringLiteral("从素材库删除"));
 
         const QAction *chosen = menu.exec(globalPos);
         if (chosen == addAct) {
             addClipFromAsset(asset);
+        } else if (batchAct && chosen == batchAct) {
+            addSelectedAssetsToTimeline();
         } else if (chosen == delAct) {
             deleteAsset(asset);
         }
@@ -805,6 +883,11 @@ namespace Mixed {
     void EditorWindow::rebuildComposition() {
         if (!m_engine) {
             return;
+        }
+        // 时间线已变化：若正在实时播放，先停（其快照已失效），复位播放按钮。
+        if (m_playback && m_playback->isPlaying()) {
+            m_playback->stop();
+            if (m_playButton) m_playButton->setText(QStringLiteral("▶"));
         }
         m_engine->setCanvasSize(m_project.width > 0 ? m_project.width : 1920,
                                 m_project.height > 0 ? m_project.height : 1080);
@@ -962,60 +1045,237 @@ namespace Mixed {
         seekTo(newStartUs);
     }
 
-    void EditorWindow::exportProject() {
-        if (m_exporting) {
-            QMessageBox::information(this, QStringLiteral("导出"),
-                                     QStringLiteral("已有导出任务进行中，请稍候。"));
+    void EditorWindow::trimClip(const QString &clipId, qint64 newStartUs,
+                                qint64 newSourceInUs, qint64 newSourceOutUs,
+                                qint64 newDurationUs) {
+        std::optional<DB::Clip> clip = m_clipRepo.findById(clipId);
+        if (!clip) {
             return;
         }
+        const double s = clip->speed > 0.0 ? clip->speed : 1.0;
+
+        // 源素材总时长（视频/音频）用于钳制 sourceOut；图片无内在时长（=0）不钳。
+        qint64 assetDur = 0;
+        if (!clip->assetId.isEmpty()) {
+            const std::optional<DB::MediaAsset> asset = m_assetRepo.findById(clip->assetId);
+            if (asset) assetDur = asset->durationUs;
+        }
+
+        qint64 startUs = std::max<qint64>(0, newStartUs);
+        qint64 srcIn   = std::max<qint64>(0, newSourceInUs);
+        qint64 srcOut  = newSourceOutUs;
+        qint64 dur     = newDurationUs;
+
+        if (assetDur > 0) {
+            srcOut = std::min(srcOut, assetDur);
+            // sourceOut 被素材时长钳住后，按可用源长度回算时长。
+            const qint64 maxDur = static_cast<qint64>((srcOut - srcIn) / s);
+            if (dur > maxDur) dur = maxDur;
+        }
+        if (srcOut <= srcIn || dur <= 0) {
+            return;  // 非法裁剪，忽略
+        }
+
+        clip->timelineStartUs = startUs;
+        clip->sourceInUs = srcIn;
+        clip->sourceOutUs = srcOut;
+        clip->durationUs = dur;
+        m_clipRepo.update(*clip);
+
+        // 重算序列总时长（裁剪可能缩短或延长结束点）。
+        qint64 maxEnd = 0;
+        for (const DB::Track &track : m_trackRepo.listBySequence(m_sequence.id)) {
+            for (const DB::Clip &c : m_clipRepo.listByTrack(track.id)) {
+                maxEnd = std::max(maxEnd, c.timelineStartUs + c.durationUs);
+            }
+        }
+        if (maxEnd != m_sequence.durationUs) {
+            m_sequence.durationUs = maxEnd;
+            m_sequenceRepo.update(m_sequence);
+        }
+
+        rebuildComposition();
+        seekTo(startUs);
+    }
+
+    void EditorWindow::splitClipAt(const QString &clipId, qint64 atUs) {
+        std::optional<DB::Clip> clip = m_clipRepo.findById(clipId);
+        if (!clip) {
+            return;
+        }
+        // 播放头须严格落在片段内部。
+        if (atUs <= clip->timelineStartUs ||
+            atUs >= clip->timelineStartUs + clip->durationUs) {
+            QMessageBox::information(this, QStringLiteral("分割"),
+                QStringLiteral("请把播放头移到选中片段内部再分割。"));
+            return;
+        }
+        const double s = clip->speed > 0.0 ? clip->speed : 1.0;
+        const qint64 leftDur = atUs - clip->timelineStartUs;
+        const qint64 splitSrc = clip->sourceInUs + static_cast<qint64>(leftDur * s);
+
+        // 右半：复制原片段，改起点/源入点/时长，sourceOut 保持。
+        DB::Clip right = *clip;
+        right.id.clear();   // insert 时分配新 id
+        right.timelineStartUs = atUs;
+        right.sourceInUs = splitSrc;
+        right.durationUs = clip->durationUs - leftDur;
+
+        // 左半：缩到分割点。
+        clip->durationUs = leftDur;
+        clip->sourceOutUs = splitSrc;
+
+        m_clipRepo.update(*clip);
+        m_clipRepo.insert(right);
+
+        rebuildComposition();
+        seekTo(atUs);
+    }
+
+    void EditorWindow::splitSelectedAtPlayhead() {
+        if (!m_timeline) return;
+        const QString id = m_timeline->selectedClipId();
+        if (id.isEmpty()) {
+            QMessageBox::information(this, QStringLiteral("分割"),
+                QStringLiteral("请先点选一个片段，再在播放头处分割。"));
+            return;
+        }
+        splitClipAt(id, m_playheadUs);
+    }
+
+    void EditorWindow::rippleDeleteClip(const QString &clipId) {
+        std::optional<DB::Clip> clip = m_clipRepo.findById(clipId);
+        if (!clip) {
+            return;
+        }
+        const QString trackId = clip->trackId;
+        const qint64 removedStart = clip->timelineStartUs;
+        const qint64 shift = clip->durationUs;
+
+        m_clipRepo.remove(clipId);
+
+        // 同轨在被删片段之后的片段整体前移 shift，补上空隙。
+        for (DB::Clip c : m_clipRepo.listByTrack(trackId)) {
+            if (c.timelineStartUs >= removedStart) {
+                c.timelineStartUs = std::max<qint64>(0, c.timelineStartUs - shift);
+                m_clipRepo.update(c);
+            }
+        }
+
+        // 重算序列总时长。
+        qint64 maxEnd = 0;
+        for (const DB::Track &track : m_trackRepo.listBySequence(m_sequence.id)) {
+            for (const DB::Clip &c : m_clipRepo.listByTrack(track.id)) {
+                maxEnd = std::max(maxEnd, c.timelineStartUs + c.durationUs);
+            }
+        }
+        m_sequence.durationUs = maxEnd;
+        m_sequenceRepo.update(m_sequence);
+
+        rebuildComposition();
+    }
+
+    void EditorWindow::compactTracks() {
+        if (m_sequence.id.isEmpty()) {
+            return;
+        }
+        // 逐轨把片段按起点顺序首尾相接，消除间隙（多视频合并到一轨的显式入口）。
+        qint64 maxEnd = 0;
+        for (const DB::Track &track : m_trackRepo.listBySequence(m_sequence.id)) {
+            if (track.trackType != QStringLiteral("video") &&
+                track.trackType != QStringLiteral("audio")) {
+                continue;
+            }
+            qint64 cursor = 0;
+            for (DB::Clip c : m_clipRepo.listByTrack(track.id)) {  // 已按起点升序
+                if (c.timelineStartUs != cursor) {
+                    c.timelineStartUs = cursor;
+                    m_clipRepo.update(c);
+                }
+                cursor += c.durationUs;
+            }
+            maxEnd = std::max(maxEnd, cursor);
+        }
+        m_sequence.durationUs = maxEnd;
+        m_sequenceRepo.update(m_sequence);
+
+        rebuildComposition();
+        seekTo(0);
+    }
+
+    void EditorWindow::addSelectedAssetsToTimeline() {
+        if (!m_mediaList) return;
+        const QList<QListWidgetItem *> items = m_mediaList->selectedItems();
+        for (QListWidgetItem *item : items) {
+            const QString id = item->data(Qt::UserRole).toString();
+            const std::optional<DB::MediaAsset> asset = m_assetRepo.findById(id);
+            if (asset) {
+                addClipFromAsset(*asset);
+            }
+        }
+    }
+
+    bool EditorWindow::buildTimelineSnapshot(std::vector<DB::Track> &tracks,
+                                             QHash<QString, std::vector<DB::Clip>> &clipsByTrack,
+                                             QHash<QString, QString> &assetPathByClip,
+                                             QStringList *missingFiles) {
+        if (m_sequence.id.isEmpty()) {
+            return false;
+        }
+        tracks = m_trackRepo.listBySequence(m_sequence.id);
+        for (const DB::Track &track : tracks) {
+            std::vector<DB::Clip> clips = m_clipRepo.listByTrack(track.id);
+            for (const DB::Clip &clip : clips) {
+                const QString path = assetPathForClip(clip);
+                if (path.isEmpty()) {
+                    continue;
+                }
+                if (!QFileInfo::exists(path)) {
+                    if (missingFiles && !missingFiles->contains(path)) {
+                        missingFiles->append(path);
+                    }
+                    continue;  // 文件缺失：不加入路径映射（合成时渲染黑帧/静音）
+                }
+                assetPathByClip.insert(clip.id, path);
+            }
+            clipsByTrack.insert(track.id, clips);
+        }
+        return true;
+    }
+
+    void EditorWindow::exportProject() {
         if (m_sequence.id.isEmpty() || m_sequence.durationUs <= 0) {
             QMessageBox::information(this, QStringLiteral("导出"),
                                      QStringLiteral("时间线为空，先添加素材到时间线再导出。"));
             return;
         }
 
-        // 选择输出路径（默认工程名.mp4）。
-        const QString suggested =
+        // 画质 + 输出路径对话框（默认名 = 工程名_时间戳_短UUID，目录记忆于 QSettings）。
+        const QString base =
             (m_project.title.isEmpty() ? QStringLiteral("export") : m_project.title) +
-            QStringLiteral(".mp4");
-        QString outPath = QFileDialog::getSaveFileName(
-            this, QStringLiteral("导出视频"), suggested,
-            QStringLiteral("MP4 视频 (*.mp4)"));
-        if (outPath.isEmpty()) {
+            QStringLiteral("_") +
+            QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss")) +
+            QStringLiteral("_") + DB::Database::newId().left(8);
+
+        const double fps = m_project.fps > 0 ? m_project.fps : 30.0;
+        ExportDialog dlg(m_project.width  > 0 ? m_project.width  : 1920,
+                         m_project.height > 0 ? m_project.height : 1080,
+                         fps, base, this);
+        if (dlg.exec() != QDialog::Accepted) {
             return;
-        }
-        if (!outPath.endsWith(QStringLiteral(".mp4"), Qt::CaseInsensitive)) {
-            outPath += QStringLiteral(".mp4");
         }
 
         // 在主线程快照时间线（worker 不访问数据库）。
         Player::Exporter::Request req;
-        req.outputPath = outPath;
-        req.width  = m_project.width  > 0 ? m_project.width  : 1920;
-        req.height = m_project.height > 0 ? m_project.height : 1080;
-        req.fps    = m_project.fps    > 0 ? static_cast<int>(std::lround(m_project.fps)) : 30;
+        req.outputPath = dlg.outputPath();
+        req.width  = dlg.outWidth();
+        req.height = dlg.outHeight();
+        req.fps    = static_cast<int>(std::lround(fps));
+        req.videoBitrate = dlg.outBitrate();
         req.durationUs = m_sequence.durationUs;
 
-        const std::vector<DB::Track> tracks = m_trackRepo.listBySequence(m_sequence.id);
-        req.tracks = tracks;
-        QStringList missingFiles;   // 收集路径非空但文件不存在的素材
-        for (const DB::Track &track : tracks) {
-            std::vector<DB::Clip> clips = m_clipRepo.listByTrack(track.id);
-            for (const DB::Clip &clip : clips) {
-                const QString path = assetPathForClip(clip);
-                if (!path.isEmpty()) {
-                    if (!QFileInfo::exists(path)) {
-                        // 素材文件已被移动/删除：导出会渲染成黑帧/静音，提前拦下。
-                        if (!missingFiles.contains(path)) {
-                            missingFiles.append(path);
-                        }
-                        continue;
-                    }
-                    req.assetPathByClip.insert(clip.id, path);
-                }
-            }
-            req.clipsByTrack.insert(track.id, clips);
-        }
+        QStringList missingFiles;
+        buildTimelineSnapshot(req.tracks, req.clipsByTrack, req.assetPathByClip, &missingFiles);
 
         // 有素材文件缺失：直接中止并列出，避免跑完产出黑屏/静音的成片。
         if (!missingFiles.isEmpty()) {
@@ -1027,51 +1287,9 @@ namespace Mixed {
             return;
         }
 
-        // 进度对话框（模态，可取消）。
-        auto *dlg = new QProgressDialog(QStringLiteral("正在导出合成视频…"),
-                                        QStringLiteral("取消"), 0, 100, this);
-        dlg->setWindowModality(Qt::WindowModal);
-        dlg->setMinimumDuration(0);
-        dlg->setAutoClose(false);
-        dlg->setAutoReset(false);
-        dlg->setValue(0);
-
-        // 起线程 + worker。
-        m_exporting = true;
-        m_exportThread = new QThread(this);
-        m_exporter = new Player::Exporter;          // 无父对象，moveToThread
-        m_exporter->setRequest(req);
-        m_exporter->moveToThread(m_exportThread);
-
-        connect(m_exportThread, &QThread::started, m_exporter, &Player::Exporter::run);
-        connect(m_exporter, &Player::Exporter::progress, dlg, &QProgressDialog::setValue);
-        connect(dlg, &QProgressDialog::canceled, m_exporter, &Player::Exporter::cancel,
-                Qt::DirectConnection);
-        connect(m_exporter, &Player::Exporter::finished, this,
-                [this, dlg](bool ok, const QString &message) {
-                    dlg->close();
-                    dlg->deleteLater();
-                    // 停线程并回收 worker。
-                    if (m_exportThread) {
-                        m_exportThread->quit();
-                        m_exportThread->wait();
-                        delete m_exportThread;
-                        m_exportThread = nullptr;
-                    }
-                    delete m_exporter;
-                    m_exporter = nullptr;
-                    m_exporting = false;
-
-                    if (ok) {
-                        QMessageBox::information(
-                            this, QStringLiteral("导出完成"),
-                            QStringLiteral("已导出到：\n%1").arg(message));
-                    } else {
-                        QMessageBox::warning(this, QStringLiteral("导出"), message);
-                    }
-                }, Qt::QueuedConnection);
-
-        m_exportThread->start();
+        // 入队后台导出（非阻塞，多任务顺序执行，进度显示在导出队列面板）。
+        m_exportQueue->enqueue(req, m_project.id, m_sequence.id,
+                               QFileInfo(req.outputPath).fileName());
     }
 
     QString EditorWindow::assetPathForClip(const DB::Clip &clip) {
@@ -1086,18 +1304,26 @@ namespace Mixed {
         return asset->filePath;
     }
 
-    void EditorWindow::seekTo(qint64 timelineUs) {
-        m_playheadUs = std::max<qint64>(0, timelineUs);
+    void EditorWindow::applyPlayheadChrome(qint64 timelineUs) {
         if (m_timecodeLabel) {
-            m_timecodeLabel->setText(formatTimecode(m_playheadUs));
+            m_timecodeLabel->setText(formatTimecode(timelineUs));
         }
-        if (m_timeline && m_timeline->playheadUs() != m_playheadUs) {
-            m_timeline->setPlayheadUs(m_playheadUs);
+        if (m_timeline && m_timeline->playheadUs() != timelineUs) {
+            m_timeline->setPlayheadUs(timelineUs);
         }
         // 横向滚动时间线，使播放头始终落在可视区内（留 80px 余量）。
-        // 否则片段堆叠到很靠后时，seek/切换后播放头跑出视口，看上去"没反应"。
         if (m_timeline && m_timelineScroll) {
             m_timelineScroll->ensureVisible(m_timeline->playheadX(), 0, 80, 0);
+        }
+    }
+
+    void EditorWindow::seekTo(qint64 timelineUs) {
+        m_playheadUs = std::max<qint64>(0, timelineUs);
+        applyPlayheadChrome(m_playheadUs);
+        // 播放中拖动播放头：交给控制器跳转（停+从新位置重启），画面由其产出。
+        if (m_playback && m_playback->isPlaying()) {
+            m_playback->seek(m_playheadUs);
+            return;
         }
         if (m_engine && m_preview && !m_sequence.id.isEmpty()) {
             Player::VideoFrame frame = m_engine->composeAt(m_playheadUs);
@@ -1114,6 +1340,51 @@ namespace Mixed {
         seekTo(m_playheadUs + direction * frameUs);
     }
 
+    void EditorWindow::togglePlayback() {
+        if (!m_playback) return;
+        if (m_sequence.id.isEmpty() || m_sequence.durationUs <= 0) {
+            return;  // 空时间线无可播放内容
+        }
+
+        // 暂停中 → 恢复；播放中 → 暂停；停止中 → 从播放头起播。
+        if (m_playback->isPlaying() && m_playback->isPaused()) {
+            m_playback->resume();
+            if (m_playButton) m_playButton->setText(QStringLiteral("⏸"));
+            return;
+        }
+        if (m_playback->isPlaying()) {
+            m_playback->pause();
+            if (m_playButton) m_playButton->setText(QStringLiteral("▶"));
+            return;
+        }
+
+        // 起播：用当前时间线快照配置控制器。
+        std::vector<DB::Track> tracks;
+        QHash<QString, std::vector<DB::Clip>> clipsByTrack;
+        QHash<QString, QString> assetPathByClip;
+        buildTimelineSnapshot(tracks, clipsByTrack, assetPathByClip, nullptr);
+
+        const double fps = m_project.fps > 0.0 ? m_project.fps : 30.0;
+        m_playback->setCanvasSize(m_project.width > 0 ? m_project.width : 1920,
+                                  m_project.height > 0 ? m_project.height : 1080);
+        m_playback->setTimeline(tracks, clipsByTrack, assetPathByClip,
+                                m_sequence.durationUs, static_cast<int>(std::lround(fps)));
+
+        qint64 startUs = m_playheadUs;
+        if (startUs >= m_sequence.durationUs) startUs = 0;
+        m_playback->play(startUs);
+        if (m_playButton) m_playButton->setText(QStringLiteral("⏸"));
+    }
+
+    void EditorWindow::onPlaybackPosition(qint64 timelineUs) {
+        m_playheadUs = std::max<qint64>(0, timelineUs);
+        applyPlayheadChrome(m_playheadUs);
+    }
+
+    void EditorWindow::onPlaybackEnded() {
+        if (m_playButton) m_playButton->setText(QStringLiteral("▶"));
+    }
+
     QString EditorWindow::formatTimecode(qint64 us) {
         const qint64 totalMs = us / 1000;
         const qint64 min = totalMs / 60000;
@@ -1126,6 +1397,10 @@ namespace Mixed {
     }
 
     void EditorWindow::closeEvent(QCloseEvent *event) {
+        // 关闭时停止实时播放，避免窗口隐藏后线程仍在跑。
+        if (m_playback) {
+            m_playback->stop();
+        }
         if (!m_closedEmitted) {
             m_closedEmitted = true;
             emit closed();
@@ -1134,6 +1409,11 @@ namespace Mixed {
     }
 
     EditorWindow::~EditorWindow() {
+        // 先停实时播放：join 其视频/音频 worker，停音频输出。
+        if (m_playback) {
+            m_playback->stop();
+        }
+
         // 停止缩略图解码线程并回收 worker。
         // 先把代际推到一个不可能匹配的值，令正在解码的片段尽快中止本轮循环。
         if (m_thumbWorker) {
@@ -1147,18 +1427,10 @@ namespace Mixed {
         delete m_thumbWorker;
         m_thumbWorker = nullptr;
 
-        // 若仍有导出在进行：请求取消并等线程结束，避免悬空。
-        if (m_exporter) {
-            m_exporter->cancel();
+        // 导出队列：取消运行中任务并 join 线程，避免悬空。
+        if (m_exportQueue) {
+            m_exportQueue->shutdown();
         }
-        if (m_exportThread) {
-            m_exportThread->quit();
-            m_exportThread->wait();
-            delete m_exportThread;
-            m_exportThread = nullptr;
-        }
-        delete m_exporter;
-        m_exporter = nullptr;
     }
 
 } // namespace Mixed

@@ -30,6 +30,7 @@ namespace Mixed::Player {
             int     width = 1920;
             int     height = 1080;
             int     fps = 30;
+            int     videoBitrate = 6'000'000;   // H.264 目标码率（bps），由导出对话框画质档决定
             qint64  durationUs = 0;
             std::vector<DB::Track> tracks;                       // 按 track_index 升序
             QHash<QString, std::vector<DB::Clip>> clipsByTrack;  // track.id -> clips

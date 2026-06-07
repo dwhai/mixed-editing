@@ -28,6 +28,7 @@ class QVBoxLayout;
 class QScrollArea;
 class QListWidget;
 class QThread;
+class QPushButton;
 
 namespace Mixed {
 
@@ -36,9 +37,12 @@ namespace Mixed {
         class CompositionEngine;
         class ClipSource;
         class Exporter;
+        class PlaybackController;
     }
 
     class TimelineView;
+    class ExportQueueManager;
+    class ExportQueuePanel;
 
     // 缩略图解码工作体：在独立线程上用 FFmpeg/ClipSource 解码片段采样帧，
     // 避免阻塞主线程。请求带"代际号"，新一轮重建会令旧代际请求被丢弃。
@@ -109,9 +113,24 @@ namespace Mixed {
         void refreshClipThumbnails();// 为各片段解码代表帧，下发给时间线控件做胶片条
         void moveClip(const QString &clipId, qint64 newStartUs); // 拖动后持久化片段新起点
         void deleteClip(const QString &clipId);  // 确认后从时间线删除单个片段
-        void exportProject();        // 选输出路径 → 后台导出合成视频（MP4）
+        void rippleDeleteClip(const QString &clipId);             // 波纹删除：后续片段前移补位
+        void trimClip(const QString &clipId, qint64 newStartUs,
+                      qint64 newSourceInUs, qint64 newSourceOutUs,
+                      qint64 newDurationUs);                       // 拖两端裁剪后落库
+        void splitClipAt(const QString &clipId, qint64 atUs);     // 在播放头处分割片段
+        void splitSelectedAtPlayhead();                           // 顶栏“分割”按钮入口
+        void compactTracks();        // 紧凑排列：消除各轨片段间隙（多视频合并到一轨）
+        void addSelectedAssetsToTimeline();   // 批量把素材库选中项按序追加到时间线
+        void exportProject();        // 选画质/路径 → 入队后台导出（MP4）
         void seekTo(qint64 timelineUs);   // 移动播放头 → 合成该时刻 → 显示
+        void applyPlayheadChrome(qint64 timelineUs); // 仅刷新播放头 UI（时间码/控件/滚动）
         void stepFrame(int direction);    // 逐帧步进（±1 帧）
+        // 读取当前序列轨道/各轨片段/clip→源路径快照（导出与播放共用）。
+        // missingFiles 非空时收集“路径非空但文件不存在”的素材路径。序列为空返回 false。
+        bool buildTimelineSnapshot(std::vector<DB::Track> &tracks,
+                                   QHash<QString, std::vector<DB::Clip>> &clipsByTrack,
+                                   QHash<QString, QString> &assetPathByClip,
+                                   QStringList *missingFiles);
         QString assetPathForClip(const DB::Clip &clip);
         static QString formatTimecode(qint64 us);
 
@@ -135,6 +154,10 @@ namespace Mixed {
         TimelineView          *m_timeline = nullptr;
         QScrollArea           *m_timelineScroll = nullptr;
 
+        // 实时播放控制器（自带独立合成引擎 + 音频输出，跑在 worker 线程）。
+        Player::PlaybackController *m_playback = nullptr;
+        QPushButton               *m_playButton = nullptr;
+
         // 动态填充的容器
         QListWidget *m_mediaList = nullptr;
         QLabel      *m_projectTitle = nullptr;
@@ -145,10 +168,9 @@ namespace Mixed {
         ThumbnailWorker *m_thumbWorker = nullptr;
         quint64          m_thumbGeneration = 0; // 每轮重建自增，用于丢弃过期解码结果
 
-        // 导出：worker 跑在 m_exportThread 上；一次只允许一个导出任务。
-        QThread          *m_exportThread = nullptr;
-        Player::Exporter *m_exporter = nullptr;
-        bool              m_exporting = false;
+        // 导出：交由队列管理器（非阻塞 + 多任务顺序执行），进度显示在 m_exportPanel。
+        ExportQueueManager *m_exportQueue = nullptr;
+        ExportQueuePanel   *m_exportPanel = nullptr;
 
         bool m_closedEmitted = false; // 防止 closeEvent 重复发信号
 
@@ -166,6 +188,11 @@ namespace Mixed {
                               const QVector<QImage> &frames);
         void onWaveformReady(quint64 reqGen, const QString &clipId,
                              const QVector<float> &peaks);
+
+        // 实时播放回调（主线程）。
+        void togglePlayback();                       // ▶/⏸ 按钮
+        void onPlaybackPosition(qint64 timelineUs);  // 播放推进 → 刷新播放头 UI
+        void onPlaybackEnded();                      // 到末尾自动停止
     };
 
 } // namespace Mixed

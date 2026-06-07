@@ -62,6 +62,13 @@ namespace Mixed {
         void clipMoved(const QString &clipId, qint64 newStartUs);
         // 右键菜单请求删除该片段（由 EditorWindow 弹确认框后再落库删除）。
         void clipDeleteRequested(const QString &clipId);
+        // 右键菜单请求波纹删除（删除后同轨后续片段前移补位）。
+        void clipRippleDeleteRequested(const QString &clipId);
+        // 拖动片段任一边缘裁剪后（释放时发出）：新起点/源入点/源出点/新时长（微秒）。
+        void clipTrimmed(const QString &clipId, qint64 newStartUs,
+                         qint64 newSourceInUs, qint64 newSourceOutUs, qint64 newDurationUs);
+        // 右键菜单请求在某时间点（通常为播放头）分割片段。
+        void clipSplitRequested(const QString &clipId, qint64 atUs);
 
     protected:
         void paintEvent(QPaintEvent *event) override;
@@ -81,6 +88,11 @@ namespace Mixed {
         int    trackRowY(int trackIdx) const;
         // 命中测试：返回 (轨道下标, 片段下标)，未命中返回 {-1,-1}。
         std::pair<int, int> clipAt(const QPoint &pos) const;
+        // 边缘命中：返回 0=非边缘 / 1=左缘 / 2=右缘。pos 须落在 (ti,ci) 片段块内。
+        int edgeAt(const QPoint &pos, int ti, int ci) const;
+        // 磁吸：把目标时间（微秒）吸附到阈值内的片段边界/播放头/0 点；
+        // excludeTi/excludeCi 为正在操作的片段（不与自身吸附）。
+        qint64 snapUs(qint64 targetUs, int excludeTi, int excludeCi) const;
         // 沿片段块平铺一组关键帧（每格取对应时间位置的帧），形成随时间变化的胶片条。
         void   paintFilmstrip(QPainter &p, const QRect &blockRect,
                               const QVector<QImage> &frames) const;
@@ -116,6 +128,15 @@ namespace Mixed {
         int     m_dragGrabDx = 0;        // 鼠标按下点相对片段左缘的像素偏移
         bool    m_dragMoved = false;     // 是否已发生有效位移（区分点选与拖动）
 
+        // 片段边缘裁剪状态。
+        bool    m_trimming = false;
+        int     m_trimEdge = 0;          // 1=左缘 2=右缘
+        qint64  m_trimOrigStartUs = 0;
+        qint64  m_trimOrigSourceInUs = 0;
+        qint64  m_trimOrigSourceOutUs = 0;
+        qint64  m_trimOrigDurationUs = 0;
+        double  m_trimSpeed = 1.0;
+
         double m_pxPerSec = 60.0;   // 缩放：每秒像素数
         bool   m_fitMode = true;    // true：按视口宽度自动适配；Ctrl+滚轮后转 false 手动缩放
 
@@ -125,6 +146,9 @@ namespace Mixed {
         static constexpr int kTrackGap = 6;     // 轨道间距
         static constexpr int kLabelW = 76;      // 左侧轨道名宽度
         static constexpr int kDragThresholdPx = 4; // 超过此位移才视为拖动
+        static constexpr int kEdgeGrabPx = 6;   // 距片段边缘多少像素内视为裁剪手柄
+        static constexpr int kSnapPx = 8;       // 磁吸阈值（像素）
+        static constexpr qint64 kMinClipUs = 100'000; // 裁剪后最小片段时长（0.1s）
     };
 
 } // namespace Mixed

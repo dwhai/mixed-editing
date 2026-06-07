@@ -140,6 +140,48 @@ namespace Mixed {
         return {-1, -1};
     }
 
+    int TimelineView::edgeAt(const QPoint &pos, int ti, int ci) const {
+        if (ti < 0 || ci < 0 || ti >= static_cast<int>(m_clipsPerTrack.size())) return 0;
+        if (ci >= static_cast<int>(m_clipsPerTrack[ti].size())) return 0;
+        const DB::Clip &clip = m_clipsPerTrack[ti][ci];
+        const int x = usToX(clip.timelineStartUs);
+        const int cw = std::max(
+            4, static_cast<int>(clip.durationUs / 1'000'000.0 * m_pxPerSec));
+        // 片段过窄时不区分边缘，避免整块都被判成手柄而无法整体拖动。
+        if (cw < 3 * kEdgeGrabPx) return 0;
+        if (pos.x() <= x + kEdgeGrabPx) return 1;          // 左缘
+        if (pos.x() >= x + cw - kEdgeGrabPx) return 2;     // 右缘
+        return 0;
+    }
+
+    qint64 TimelineView::snapUs(qint64 targetUs, int excludeTi, int excludeCi) const {
+        const int targetX = usToX(targetUs);
+        qint64 bestUs = targetUs;
+        int bestDx = kSnapPx + 1;
+
+        auto consider = [&](qint64 candUs) {
+            const int dx = std::abs(usToX(candUs) - targetX);
+            if (dx <= kSnapPx && dx < bestDx) {
+                bestDx = dx;
+                bestUs = candUs;
+            }
+        };
+
+        consider(0);
+        consider(m_playheadUs);
+        for (size_t i = 0; i < m_clipsPerTrack.size(); ++i) {
+            for (size_t j = 0; j < m_clipsPerTrack[i].size(); ++j) {
+                if (static_cast<int>(i) == excludeTi && static_cast<int>(j) == excludeCi) {
+                    continue;
+                }
+                const DB::Clip &c = m_clipsPerTrack[i][j];
+                consider(c.timelineStartUs);
+                consider(c.timelineStartUs + c.durationUs);
+            }
+        }
+        return bestUs;
+    }
+
     void TimelineView::paintFilmstrip(QPainter &p, const QRect &blockRect,
                                       const QVector<QImage> &frames) const {
         if (frames.isEmpty() || blockRect.width() <= 0 || blockRect.height() <= 0) {
@@ -374,12 +416,30 @@ namespace Mixed {
             return;
         }
 
-        // 命中片段：选中并进入"待拖动"状态（位移超过阈值才真正移动）。
+        // 命中片段：选中。落在边缘 → 裁剪；否则进入"待拖动"状态。
         const auto [ti, ci] = clipAt(pos);
         if (ti >= 0 && ci >= 0) {
             const DB::Clip &clip = m_clipsPerTrack[ti][ci];
             m_selectedClipId = clip.id;
             emit clipSelected(clip.id);
+
+            const int edge = edgeAt(pos, ti, ci);
+            if (edge != 0) {
+                // 边缘裁剪。
+                m_trimming = true;
+                m_trimEdge = edge;
+                m_dragTrackIdx = ti;
+                m_dragClipIdx = ci;
+                m_trimOrigStartUs = clip.timelineStartUs;
+                m_trimOrigSourceInUs = clip.sourceInUs;
+                m_trimOrigSourceOutUs = clip.sourceOutUs;
+                m_trimOrigDurationUs = clip.durationUs;
+                m_trimSpeed = clip.speed > 0.0 ? clip.speed : 1.0;
+                m_dragMoved = false;
+                setCursor(Qt::SizeHorCursor);
+                update();
+                return;
+            }
 
             m_draggingClip = true;
             m_dragTrackIdx = ti;
@@ -408,12 +468,48 @@ namespace Mixed {
             return;
         }
 
+        // 边缘裁剪：按拖动的边调整起点/源入出点/时长（本地快照，释放时落库）。
+        if (m_trimming && m_dragTrackIdx >= 0 &&
+            m_dragTrackIdx < static_cast<int>(m_clipsPerTrack.size()) &&
+            m_dragClipIdx < static_cast<int>(m_clipsPerTrack[m_dragTrackIdx].size())) {
+            DB::Clip &clip = m_clipsPerTrack[m_dragTrackIdx][m_dragClipIdx];
+            const qint64 origEndUs = m_trimOrigStartUs + m_trimOrigDurationUs;
+            if (m_trimEdge == 1) {
+                // 左缘：移动起点，源入点同步偏移（按 speed）；不超过原右端 - 最小时长。
+                qint64 newStartUs = snapUs(xToUs(pos.x()), m_dragTrackIdx, m_dragClipIdx);
+                newStartUs = std::clamp<qint64>(newStartUs, 0, origEndUs - kMinClipUs);
+                const qint64 deltaUs = newStartUs - m_trimOrigStartUs;
+                qint64 newSourceIn = m_trimOrigSourceInUs +
+                    static_cast<qint64>(deltaUs * m_trimSpeed);
+                if (newSourceIn < 0) {  // 源不足：把起点回拨到源允许的最早处
+                    newStartUs -= static_cast<qint64>(newSourceIn / m_trimSpeed);
+                    newSourceIn = 0;
+                }
+                clip.timelineStartUs = newStartUs;
+                clip.sourceInUs = newSourceIn;
+                clip.durationUs = origEndUs - newStartUs;
+            } else {
+                // 右缘：调整时长，源出点同步偏移（按 speed）。上限由 EditorWindow 按素材时长钳制。
+                qint64 newEndUs = snapUs(xToUs(pos.x()), m_dragTrackIdx, m_dragClipIdx);
+                newEndUs = std::max<qint64>(newEndUs, m_trimOrigStartUs + kMinClipUs);
+                const qint64 newDuration = newEndUs - m_trimOrigStartUs;
+                clip.durationUs = newDuration;
+                clip.sourceOutUs = m_trimOrigSourceInUs +
+                    static_cast<qint64>(newDuration * m_trimSpeed);
+            }
+            m_dragMoved = true;
+            update();
+            return;
+        }
+
         if (m_draggingClip && m_dragTrackIdx >= 0 &&
             m_dragTrackIdx < static_cast<int>(m_clipsPerTrack.size()) &&
             m_dragClipIdx < static_cast<int>(m_clipsPerTrack[m_dragTrackIdx].size())) {
-            // 新起点 = 鼠标 x 扣除抓取偏移，换算回时间并钳制不为负。
+            // 新起点 = 鼠标 x 扣除抓取偏移，换算回时间并钳制不为负，再做磁吸。
             const int newLeftX = pos.x() - m_dragGrabDx;
             qint64 newStartUs = xToUs(newLeftX);
+            if (newStartUs < 0) newStartUs = 0;
+            newStartUs = snapUs(newStartUs, m_dragTrackIdx, m_dragClipIdx);
             if (newStartUs < 0) newStartUs = 0;
 
             // 位移超过阈值才视为"拖动"，否则当作纯点选（释放时不落库）。
@@ -426,14 +522,36 @@ namespace Mixed {
             return;
         }
 
-        // 悬停在片段上时给出可拖动光标提示。
+        // 悬停反馈：边缘 → 裁剪光标；片段内 → 可拖动光标；空白 → 箭头。
         const auto [ti, ci] = clipAt(pos);
-        setCursor((ti >= 0 && ci >= 0) ? Qt::OpenHandCursor : Qt::ArrowCursor);
+        if (ti >= 0 && ci >= 0) {
+            setCursor(edgeAt(pos, ti, ci) != 0 ? Qt::SizeHorCursor : Qt::OpenHandCursor);
+        } else {
+            setCursor(Qt::ArrowCursor);
+        }
     }
 
     void TimelineView::mouseReleaseEvent(QMouseEvent *event) {
         Q_UNUSED(event);
         m_draggingPlayhead = false;
+
+        // 裁剪释放：落库新边界。
+        if (m_trimming) {
+            const bool valid = m_dragMoved && m_dragTrackIdx >= 0 &&
+                m_dragTrackIdx < static_cast<int>(m_clipsPerTrack.size()) &&
+                m_dragClipIdx < static_cast<int>(m_clipsPerTrack[m_dragTrackIdx].size());
+            if (valid) {
+                const DB::Clip &clip = m_clipsPerTrack[m_dragTrackIdx][m_dragClipIdx];
+                emit clipTrimmed(clip.id, clip.timelineStartUs, clip.sourceInUs,
+                                 clip.sourceOutUs, clip.durationUs);
+            }
+            m_trimming = false;
+            m_trimEdge = 0;
+            m_dragTrackIdx = m_dragClipIdx = -1;
+            m_dragMoved = false;
+            setCursor(Qt::ArrowCursor);
+            return;
+        }
 
         if (m_draggingClip) {
             const bool moved = m_dragMoved && m_dragTrackIdx >= 0 &&
@@ -466,13 +584,28 @@ namespace Mixed {
         // 用 popup()（非阻塞）而非 exec()：exec() 会在 contextMenuEvent 内开启
         // 嵌套事件循环，在 macOS 上叠加滚动区/视口时易触发窗口几何空指针崩溃。
         // 菜单设置 DeleteOnClose 自管生命周期，动作通过信号异步触发。
+        const DB::Clip &clip = m_clipsPerTrack[ti][ci];
+        const bool playheadInside = m_playheadUs > clip.timelineStartUs &&
+            m_playheadUs < clip.timelineStartUs + clip.durationUs;
+        const qint64 atUs = m_playheadUs;
+
         auto *menu = new QMenu(this);
         menu->setAttribute(Qt::WA_DeleteOnClose);
+
+        if (playheadInside) {
+            QAction *splitAct = menu->addAction(QStringLiteral("在播放头处分割"));
+            connect(splitAct, &QAction::triggered, this,
+                    [this, clipId, atUs]() { emit clipSplitRequested(clipId, atUs); });
+            menu->addSeparator();
+        }
         QAction *delAct = menu->addAction(QStringLiteral("从时间线删除片段"));
         connect(delAct, &QAction::triggered, this, [this, clipId]() {
             // 实际删除由 EditorWindow 弹确认框后执行。
             emit clipDeleteRequested(clipId);
         });
+        QAction *rippleAct = menu->addAction(QStringLiteral("波纹删除（后续前移）"));
+        connect(rippleAct, &QAction::triggered, this,
+                [this, clipId]() { emit clipRippleDeleteRequested(clipId); });
         menu->popup(event->globalPos());
         event->accept();
     }

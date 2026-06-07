@@ -998,15 +998,33 @@ namespace Mixed {
 
         const std::vector<DB::Track> tracks = m_trackRepo.listBySequence(m_sequence.id);
         req.tracks = tracks;
+        QStringList missingFiles;   // 收集路径非空但文件不存在的素材
         for (const DB::Track &track : tracks) {
             std::vector<DB::Clip> clips = m_clipRepo.listByTrack(track.id);
             for (const DB::Clip &clip : clips) {
                 const QString path = assetPathForClip(clip);
                 if (!path.isEmpty()) {
+                    if (!QFileInfo::exists(path)) {
+                        // 素材文件已被移动/删除：导出会渲染成黑帧/静音，提前拦下。
+                        if (!missingFiles.contains(path)) {
+                            missingFiles.append(path);
+                        }
+                        continue;
+                    }
                     req.assetPathByClip.insert(clip.id, path);
                 }
             }
             req.clipsByTrack.insert(track.id, clips);
+        }
+
+        // 有素材文件缺失：直接中止并列出，避免跑完产出黑屏/静音的成片。
+        if (!missingFiles.isEmpty()) {
+            const QString list = missingFiles.join(QStringLiteral("\n"));
+            QMessageBox::warning(
+                this, QStringLiteral("导出"),
+                QStringLiteral("以下素材文件不存在，无法导出。\n"
+                               "请重新导入素材，或将文件放回原路径：\n\n%1").arg(list));
+            return;
         }
 
         // 进度对话框（模态，可取消）。

@@ -60,7 +60,10 @@ namespace Mixed::Player {
 
         ClipSource *sourceFor(const QString &clipId, const QString &path);
         Placement placementFor(const DB::Clip &clip, const QImage &srcImage) const;
+        // 不依赖已解码图像、仅用源宽高计算 placement（快路径预判铺满画布用）。
+        Placement placementForSize(const DB::Clip &clip, int srcW, int srcH) const;
         VideoFrame canvasToYuv(const QImage &canvas) const;
+        VideoFrame blackYuv() const;   // 画布尺寸的黑色 YUV420P 帧
 
         // 特效链占位：当前直接返回原图，后续阶段对接 libavfilter。
         QImage applyEffects(const QString &clipId, const QImage &src) const;
@@ -69,6 +72,7 @@ namespace Mixed::Player {
         int m_canvasH = 1080;
 
         std::vector<DB::Track> m_tracks;
+        std::vector<DB::Track> m_videoTracksSorted;  // 仅视频轨、按 track_index 升序（setTimeline 时算好）
         std::unordered_map<QString, std::vector<DB::Clip>> m_clipsByTrack;
         std::unordered_map<QString, QString> m_assetPathByClip;
 

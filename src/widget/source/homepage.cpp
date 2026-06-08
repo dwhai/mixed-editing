@@ -8,6 +8,7 @@
 #include "../../db/include/Database.h"
 
 #include <QDateTime>
+#include <QFontMetrics>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -33,6 +34,25 @@ namespace Mixed {
             }
             const QDateTime dt = QDateTime::fromMSecsSinceEpoch(ms);
             return dt.toString(QStringLiteral("yyyy-MM-dd HH:mm"));
+        }
+
+        // 按工程 id 稳定地取一组柔和渐变色（缩略图占位用）。
+        // 同一工程每次进入颜色一致，不同工程之间有区分度。
+        struct Gradient { QString from; QString to; };
+        Gradient gradientForId(const QString &id) {
+            static const Gradient palette[] = {
+                {QStringLiteral("#5b8def"), QStringLiteral("#6aa6e8")},
+                {QStringLiteral("#7b6ef0"), QStringLiteral("#9d7bf0")},
+                {QStringLiteral("#3fb5a8"), QStringLiteral("#56c79a")},
+                {QStringLiteral("#f0936e"), QStringLiteral("#f0b56e")},
+                {QStringLiteral("#ef6e96"), QStringLiteral("#f08fb0")},
+                {QStringLiteral("#6e8af0"), QStringLiteral("#6ec7f0")},
+            };
+            uint hash = 0;
+            for (const QChar &c : id) {
+                hash = hash * 31u + c.unicode();
+            }
+            return palette[hash % (sizeof(palette) / sizeof(palette[0]))];
         }
     } // namespace
 
@@ -68,9 +88,9 @@ namespace Mixed {
 
         // 工程卡片网格。
         m_grid = new QGridLayout();
-        m_grid->setContentsMargins(0, 0, 0, 0);
-        m_grid->setHorizontalSpacing(16);
-        m_grid->setVerticalSpacing(16);
+        m_grid->setContentsMargins(0, 4, 0, 0);
+        m_grid->setHorizontalSpacing(18);
+        m_grid->setVerticalSpacing(18);
         auto *gridWrap = new QWidget(content);
         gridWrap->setLayout(m_grid);
         layout->addWidget(gridWrap);
@@ -120,7 +140,7 @@ namespace Mixed {
             m_emptyHint->setVisible(projects.empty());
         }
 
-        // 每行 4 张卡片。
+        // 每行 4 张卡片，右侧留一个伸缩列让卡片保持固定宽度并左对齐。
         const int columns = 4;
         for (size_t i = 0; i < projects.size(); ++i) {
             const int row = static_cast<int>(i) / columns;
@@ -128,39 +148,60 @@ namespace Mixed {
             m_grid->addWidget(buildProjectCard(projects[i]),
                               row, col, Qt::AlignLeft | Qt::AlignTop);
         }
+        m_grid->setColumnStretch(columns, 1);
     }
 
     QWidget *HomePage::buildProjectCard(const DB::Project &project) {
         const QString projectId = project.id;
 
         auto *card = new QFrame(this);
-        card->setObjectName("draftCard");
+        card->setObjectName("projectCard");
         card->setCursor(Qt::PointingHandCursor);
         card->setContextMenuPolicy(Qt::CustomContextMenu);
 
         auto *layout = new QVBoxLayout(card);
-        layout->setContentsMargins(12, 12, 12, 12);
-        layout->setSpacing(8);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(0);
 
-        // 缩略图占位（无封面时显示工程名首字）。
+        // 缩略图区：16:9 渐变色块，中间叠工程名首字大字。无封面时的占位设计。
         auto *thumb = new QLabel(card);
-        thumb->setObjectName("draftThumb");
+        thumb->setObjectName("projectThumb");
         thumb->setAlignment(Qt::AlignCenter);
+        thumb->setFixedHeight(120);
         const QString initial = project.title.isEmpty()
-            ? QStringLiteral("?") : project.title.left(1);
+            ? QStringLiteral("?") : project.title.left(1).toUpper();
         thumb->setText(initial);
-        layout->addWidget(thumb, 0, Qt::AlignHCenter);
+        const Gradient g = gradientForId(projectId);
+        thumb->setStyleSheet(QStringLiteral(
+            "QLabel#projectThumb {"
+            "  border-top-left-radius: 14px; border-top-right-radius: 14px;"
+            "  color: rgba(255,255,255,0.92); font-size: 40px; font-weight: 700;"
+            "  background: qlineargradient(x1:0, y1:0, x2:1, y2:1,"
+            "      stop:0 %1, stop:1 %2);"
+            "}").arg(g.from, g.to));
+        layout->addWidget(thumb);
 
-        auto *title = new QLabel(project.title, card);
-        title->setObjectName("draftDate");
-        title->setWordWrap(true);
-        layout->addWidget(title);
+        // 信息区：工程名 + 更新时间。
+        auto *info = new QWidget(card);
+        info->setObjectName("projectCardInfo");
+        auto *infoLayout = new QVBoxLayout(info);
+        infoLayout->setContentsMargins(12, 10, 12, 12);
+        infoLayout->setSpacing(4);
 
-        auto *info = new QLabel(formatUpdated(project.meta.updatedAt), card);
-        info->setObjectName("draftInfo");
+        auto *title = new QLabel(project.title, info);
+        title->setObjectName("projectCardTitle");
+        QFontMetrics fm(title->font());
+        title->setText(fm.elidedText(project.title, Qt::ElideRight, 168));
+        title->setToolTip(project.title);
+        infoLayout->addWidget(title);
+
+        auto *meta = new QLabel(QStringLiteral("更新于 ") + formatUpdated(project.meta.updatedAt), info);
+        meta->setObjectName("projectCardMeta");
+        infoLayout->addWidget(meta);
+
         layout->addWidget(info);
 
-        // 点击卡片打开工程；右键菜单提供重命名。
+        // 点击卡片打开工程；右键菜单提供重命名 / 打开。
         card->installEventFilter(this);
         card->setProperty("projectId", projectId);
 

@@ -18,6 +18,7 @@
 #include "../../ffmpeg/include/PlaybackController.h"
 
 #include <QCloseEvent>
+#include <QAction>
 #include <QDateTime>
 #include <QEvent>
 #include <QFileDialog>
@@ -31,6 +32,7 @@
 #include <QListWidget>
 #include <QListWidgetItem>
 #include <QMenu>
+#include <QMenuBar>
 #include <QMessageBox>
 #include <QMetaType>
 #include <QProgressDialog>
@@ -283,7 +285,7 @@ namespace Mixed {
 
     EditorWindow::EditorWindow(const QString &projectId, QWidget *parent)
         : QMainWindow(parent), m_requestedProjectId(projectId) {
-        setWindowTitle(QStringLiteral("剪辑工作区"));
+        setWindowTitle(QStringLiteral("未命名工程"));
         setStyleSheet(Theme::styleSheet());
         // 独立窗口：默认占据较大尺寸，剪辑需要充足的横向空间。
         resize(1280, 800);
@@ -342,6 +344,8 @@ namespace Mixed {
     }
 
     void EditorWindow::setupUi() {
+        buildMenuBar();
+
         auto *root = new QWidget(this);
         root->setObjectName("editorRoot");
         setCentralWidget(root);
@@ -363,6 +367,32 @@ namespace Mixed {
         layout->addWidget(buildTimeline());
     }
 
+    void EditorWindow::buildMenuBar() {
+        // 窗口菜单栏：「工程」菜单含 返回主页 / 导出视频。
+        QMenuBar *bar = menuBar();
+        bar->setObjectName("editorMenuBar");
+
+        QMenu *projectMenu = bar->addMenu(QStringLiteral("工程"));
+
+        QAction *backAction = projectMenu->addAction(QStringLiteral("返回主页"));
+        backAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+W")));
+        connect(backAction, &QAction::triggered, this, &EditorWindow::close);
+
+        QAction *exportAction = projectMenu->addAction(QStringLiteral("导出视频…"));
+        exportAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+E")));
+        connect(exportAction, &QAction::triggered, this, &EditorWindow::exportProject);
+    }
+
+    void EditorWindow::applyProjectTitle() {
+        // 工程名为空时退化为占位名，同步到顶栏标签与窗口标题。
+        const QString title = m_project.title.isEmpty()
+            ? QStringLiteral("未命名工程") : m_project.title;
+        if (m_projectTitle) {
+            m_projectTitle->setText(title);
+        }
+        setWindowTitle(title);
+    }
+
     QWidget *EditorWindow::buildTopBar() {
         auto *bar = new QFrame(this);
         bar->setObjectName("editorTopBar");
@@ -371,11 +401,6 @@ namespace Mixed {
         layout->setContentsMargins(16, 8, 16, 8);
         layout->setSpacing(10);
 
-        auto *back = new QPushButton(QStringLiteral("‹  返回"), bar);
-        back->setObjectName("editorBackButton");
-        back->setCursor(Qt::PointingHandCursor);
-        connect(back, &QPushButton::clicked, this, &EditorWindow::close);
-
         m_projectTitle = new QLabel(QStringLiteral("未命名工程"), bar);
         m_projectTitle->setObjectName("editorProjectTitle");
         m_projectTitle->setCursor(Qt::PointingHandCursor);
@@ -383,68 +408,9 @@ namespace Mixed {
         // 双击标题重命名：装事件过滤器捕获鼠标双击。
         m_projectTitle->installEventFilter(this);
 
-        // ---- 播放控件组（圆角胶囊容器）：上一帧 / ▶ / 时间码 / 下一帧 ----
-        auto *transport = new QFrame(bar);
-        transport->setObjectName("editorTransport");
-        auto *transportLayout = new QHBoxLayout(transport);
-        transportLayout->setContentsMargins(6, 4, 6, 4);
-        transportLayout->setSpacing(6);
-
-        auto *prevFrame = new QPushButton(QStringLiteral("◀|"), transport);
-        prevFrame->setObjectName("editorStepButton");
-        prevFrame->setCursor(Qt::PointingHandCursor);
-        prevFrame->setToolTip(QStringLiteral("上一帧"));
-        connect(prevFrame, &QPushButton::clicked, this, [this]() { stepFrame(-1); });
-
-        // 播放 / 暂停。
-        m_playButton = new QPushButton(QStringLiteral("▶"), transport);
-        m_playButton->setObjectName("editorPlayButton");
-        m_playButton->setCursor(Qt::PointingHandCursor);
-        m_playButton->setToolTip(QStringLiteral("播放 / 暂停"));
-        connect(m_playButton, &QPushButton::clicked, this, &EditorWindow::togglePlayback);
-
-        m_timecodeLabel = new QLabel(formatTimecode(0), transport);
-        m_timecodeLabel->setObjectName("editorTimecode");
-
-        auto *nextFrame = new QPushButton(QStringLiteral("|▶"), transport);
-        nextFrame->setObjectName("editorStepButton");
-        nextFrame->setCursor(Qt::PointingHandCursor);
-        nextFrame->setToolTip(QStringLiteral("下一帧"));
-        connect(nextFrame, &QPushButton::clicked, this, [this]() { stepFrame(1); });
-
-        transportLayout->addWidget(prevFrame);
-        transportLayout->addWidget(m_playButton);
-        transportLayout->addWidget(m_timecodeLabel);
-        transportLayout->addWidget(nextFrame);
-
-        // ---- 编辑工具组：分割 / 紧凑排列 ----
-        auto *splitBtn = new QPushButton(QStringLiteral("分割"), bar);
-        splitBtn->setObjectName("editorToolButton");
-        splitBtn->setCursor(Qt::PointingHandCursor);
-        splitBtn->setToolTip(QStringLiteral("在播放头处分割选中片段"));
-        connect(splitBtn, &QPushButton::clicked, this, &EditorWindow::splitSelectedAtPlayhead);
-
-        auto *compactBtn = new QPushButton(QStringLiteral("紧凑排列"), bar);
-        compactBtn->setObjectName("editorToolButton");
-        compactBtn->setCursor(Qt::PointingHandCursor);
-        compactBtn->setToolTip(QStringLiteral("消除片段间隙，使各轨片段首尾相接"));
-        connect(compactBtn, &QPushButton::clicked, this, &EditorWindow::compactTracks);
-
-        auto *exportBtn = new QPushButton(QStringLiteral("导出"), bar);
-        exportBtn->setObjectName("editorExportButton");
-        exportBtn->setCursor(Qt::PointingHandCursor);
-        connect(exportBtn, &QPushButton::clicked, this, &EditorWindow::exportProject);
-
-        // 布局：左[返回·标题]  —伸缩—  中[播放组·工具组]  —伸缩—  右[导出]
-        layout->addWidget(back);
+        // 布局：左[工程名] —伸缩—（播放控件已移入预览区，分割/紧凑已移入时间线行，导出/返回在菜单栏）
         layout->addWidget(m_projectTitle);
         layout->addStretch();
-        layout->addWidget(transport);
-        layout->addSpacing(8);
-        layout->addWidget(splitBtn);
-        layout->addWidget(compactBtn);
-        layout->addStretch();
-        layout->addWidget(exportBtn);
         return bar;
     }
 
@@ -509,10 +475,49 @@ namespace Mixed {
 
         auto *layout = new QVBoxLayout(area);
         layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(0);
 
         // 预览输出：合成引擎产出的 YUV420P 帧由 GL 控件渲染。
         m_preview = new Player::VideoGLWidget(area);
         layout->addWidget(m_preview, /*stretch=*/1);
+
+        // ---- 播放控件条：上一帧 / ▶ / 时间码 / 下一帧，停靠预览区底部、居中 ----
+        auto *controls = new QFrame(area);
+        controls->setObjectName("editorPreviewControls");
+        auto *controlsLayout = new QHBoxLayout(controls);
+        controlsLayout->setContentsMargins(10, 6, 10, 6);
+        controlsLayout->setSpacing(8);
+
+        auto *prevFrame = new QPushButton(QStringLiteral("◀|"), controls);
+        prevFrame->setObjectName("editorStepButton");
+        prevFrame->setCursor(Qt::PointingHandCursor);
+        prevFrame->setToolTip(QStringLiteral("上一帧"));
+        connect(prevFrame, &QPushButton::clicked, this, [this]() { stepFrame(-1); });
+
+        // 播放 / 暂停。
+        m_playButton = new QPushButton(QStringLiteral("▶"), controls);
+        m_playButton->setObjectName("editorPlayButton");
+        m_playButton->setCursor(Qt::PointingHandCursor);
+        m_playButton->setToolTip(QStringLiteral("播放 / 暂停"));
+        connect(m_playButton, &QPushButton::clicked, this, &EditorWindow::togglePlayback);
+
+        m_timecodeLabel = new QLabel(formatTimecode(0), controls);
+        m_timecodeLabel->setObjectName("editorTimecode");
+
+        auto *nextFrame = new QPushButton(QStringLiteral("|▶"), controls);
+        nextFrame->setObjectName("editorStepButton");
+        nextFrame->setCursor(Qt::PointingHandCursor);
+        nextFrame->setToolTip(QStringLiteral("下一帧"));
+        connect(nextFrame, &QPushButton::clicked, this, [this]() { stepFrame(1); });
+
+        controlsLayout->addStretch();
+        controlsLayout->addWidget(prevFrame);
+        controlsLayout->addWidget(m_playButton);
+        controlsLayout->addWidget(m_timecodeLabel);
+        controlsLayout->addWidget(nextFrame);
+        controlsLayout->addStretch();
+
+        layout->addWidget(controls);
 
         return area;
     }
@@ -526,9 +531,32 @@ namespace Mixed {
         layout->setContentsMargins(14, 12, 14, 14);
         layout->setSpacing(8);
 
+        // 标题行：左[标题] —伸缩— 右[剪辑工具：分割 / 紧凑排列 …]。
+        // 后续其他剪辑相关功能也加在这一行。
+        auto *headingRow = new QHBoxLayout();
+        headingRow->setContentsMargins(0, 0, 0, 0);
+        headingRow->setSpacing(8);
+
         auto *heading = new QLabel(QStringLiteral("时间线  ·  Ctrl+滚轮缩放"), timeline);
         heading->setObjectName("editorPanelTitle");
-        layout->addWidget(heading);
+        headingRow->addWidget(heading);
+        headingRow->addStretch();
+
+        auto *splitBtn = new QPushButton(QStringLiteral("分割"), timeline);
+        splitBtn->setObjectName("editorToolButton");
+        splitBtn->setCursor(Qt::PointingHandCursor);
+        splitBtn->setToolTip(QStringLiteral("在播放头处分割选中片段"));
+        connect(splitBtn, &QPushButton::clicked, this, &EditorWindow::splitSelectedAtPlayhead);
+        headingRow->addWidget(splitBtn);
+
+        auto *compactBtn = new QPushButton(QStringLiteral("紧凑排列"), timeline);
+        compactBtn->setObjectName("editorToolButton");
+        compactBtn->setCursor(Qt::PointingHandCursor);
+        compactBtn->setToolTip(QStringLiteral("消除片段间隙，使各轨片段首尾相接"));
+        connect(compactBtn, &QPushButton::clicked, this, &EditorWindow::compactTracks);
+        headingRow->addWidget(compactBtn);
+
+        layout->addLayout(headingRow);
 
         // 自绘时间线控件放入横向滚动区（轨道可能超出可视宽度）。
         auto *scroll = new QScrollArea(timeline);
@@ -598,9 +626,7 @@ namespace Mixed {
         }
 
         m_project = *proj;
-        if (m_projectTitle) {
-            m_projectTitle->setText(m_project.title);
-        }
+        applyProjectTitle();
 
         // 加载主序列。
         m_sequence = DB::Sequence{};
@@ -655,9 +681,7 @@ namespace Mixed {
             m_project = DB::Project{}; // 插入失败回滚内存态，下次重试
             return;
         }
-        if (m_projectTitle) {
-            m_projectTitle->setText(m_project.title);
-        }
+        applyProjectTitle();
 
         // 主序列。
         m_sequence.projectId = m_project.id;
@@ -1040,7 +1064,12 @@ namespace Mixed {
             return; // 用户取消
         }
 
+        // 音轨联动：删除视频片段时，一并删除其配对音频片段。
+        const std::optional<DB::Clip> audio = pairedAudioClip(*clip);
         m_clipRepo.remove(clipId);
+        if (audio) {
+            m_clipRepo.remove(audio->id);
+        }
 
         // 重算序列总时长（取剩余片段最大结束点）。
         qint64 maxEnd = 0;
@@ -1058,14 +1087,43 @@ namespace Mixed {
         rebuildComposition();
     }
 
+    std::optional<DB::Clip> EditorWindow::pairedAudioClip(const DB::Clip &videoClip) {
+        // 仅视频轨片段才有音轨配对；音频/其他轨不联动。
+        if (m_audioTrackId.isEmpty() || videoClip.trackId != m_videoTrackId) {
+            return std::nullopt;
+        }
+        if (videoClip.assetId.isEmpty()) {
+            return std::nullopt;
+        }
+        // 配对约定：同一素材、同一时间线起点的音频轨片段即为该视频片段的音轨。
+        // 各项操作都保持二者起点一致，故起点足以唯一定位。
+        for (const DB::Clip &c : m_clipRepo.listByTrack(m_audioTrackId)) {
+            if (c.assetId == videoClip.assetId &&
+                c.timelineStartUs == videoClip.timelineStartUs) {
+                return c;
+            }
+        }
+        return std::nullopt;
+    }
+
     void EditorWindow::moveClip(const QString &clipId, qint64 newStartUs) {
         std::optional<DB::Clip> clip = m_clipRepo.findById(clipId);
         if (!clip) {
             return;
         }
         if (newStartUs < 0) newStartUs = 0;
+
+        // 先按旧起点定位配对音频片段，再改视频片段起点。
+        std::optional<DB::Clip> audio = pairedAudioClip(*clip);
+
         clip->timelineStartUs = newStartUs;
         m_clipRepo.update(*clip);
+
+        // 音轨联动：音频片段同步移动到相同起点。
+        if (audio) {
+            audio->timelineStartUs = newStartUs;
+            m_clipRepo.update(*audio);
+        }
 
         // 扩展序列总时长（拖到更靠后时）。
         const qint64 clipEnd = newStartUs + clip->durationUs;
@@ -1109,11 +1167,23 @@ namespace Mixed {
             return;  // 非法裁剪，忽略
         }
 
+        // 先按旧起点定位配对音频片段，再改视频片段。
+        std::optional<DB::Clip> audio = pairedAudioClip(*clip);
+
         clip->timelineStartUs = startUs;
         clip->sourceInUs = srcIn;
         clip->sourceOutUs = srcOut;
         clip->durationUs = dur;
         m_clipRepo.update(*clip);
+
+        // 音轨联动：音频片段同步裁剪（同起点/源入出点/时长）。
+        if (audio) {
+            audio->timelineStartUs = startUs;
+            audio->sourceInUs = srcIn;
+            audio->sourceOutUs = srcOut;
+            audio->durationUs = dur;
+            m_clipRepo.update(*audio);
+        }
 
         // 重算序列总时长（裁剪可能缩短或延长结束点）。
         qint64 maxEnd = 0;
@@ -1147,6 +1217,9 @@ namespace Mixed {
         const qint64 leftDur = atUs - clip->timelineStartUs;
         const qint64 splitSrc = clip->sourceInUs + static_cast<qint64>(leftDur * s);
 
+        // 先按旧起点定位配对音频片段（在改动视频片段前）。
+        std::optional<DB::Clip> audio = pairedAudioClip(*clip);
+
         // 右半：复制原片段，改起点/源入点/时长，sourceOut 保持。
         DB::Clip right = *clip;
         right.id.clear();   // insert 时分配新 id
@@ -1160,6 +1233,29 @@ namespace Mixed {
 
         m_clipRepo.update(*clip);
         m_clipRepo.insert(right);
+
+        // 音轨联动：配对音频片段在同一点分割（源映射一致：同 sourceIn/speed）。
+        if (audio) {
+            const double as = audio->speed > 0.0 ? audio->speed : 1.0;
+            const qint64 aLeftDur = atUs - audio->timelineStartUs;
+            // 防御：配对片段时间范围异常时跳过音轨分割，避免产生非法片段。
+            if (aLeftDur > 0 && aLeftDur < audio->durationUs) {
+                const qint64 aSplitSrc =
+                    audio->sourceInUs + static_cast<qint64>(aLeftDur * as);
+
+                DB::Clip aRight = *audio;
+                aRight.id.clear();
+                aRight.timelineStartUs = atUs;
+                aRight.sourceInUs = aSplitSrc;
+                aRight.durationUs = audio->durationUs - aLeftDur;
+
+                audio->durationUs = aLeftDur;
+                audio->sourceOutUs = aSplitSrc;
+
+                m_clipRepo.update(*audio);
+                m_clipRepo.insert(aRight);
+            }
+        }
 
         rebuildComposition();
         seekTo(atUs);
@@ -1185,6 +1281,9 @@ namespace Mixed {
         const qint64 removedStart = clip->timelineStartUs;
         const qint64 shift = clip->durationUs;
 
+        // 音轨联动：先定位配对音频片段（按旧起点）。
+        const std::optional<DB::Clip> audio = pairedAudioClip(*clip);
+
         m_clipRepo.remove(clipId);
 
         // 同轨在被删片段之后的片段整体前移 shift，补上空隙。
@@ -1192,6 +1291,19 @@ namespace Mixed {
             if (c.timelineStartUs >= removedStart) {
                 c.timelineStartUs = std::max<qint64>(0, c.timelineStartUs - shift);
                 m_clipRepo.update(c);
+            }
+        }
+
+        // 音轨联动：删除配对音频片段，并对音轨做同样的波纹前移。
+        if (audio) {
+            const qint64 aRemovedStart = audio->timelineStartUs;
+            const qint64 aShift = audio->durationUs;
+            m_clipRepo.remove(audio->id);
+            for (DB::Clip c : m_clipRepo.listByTrack(m_audioTrackId)) {
+                if (c.timelineStartUs >= aRemovedStart) {
+                    c.timelineStartUs = std::max<qint64>(0, c.timelineStartUs - aShift);
+                    m_clipRepo.update(c);
+                }
             }
         }
 
@@ -1473,9 +1585,7 @@ namespace Mixed {
 
         m_project.title = trimmed;
         if (m_projectRepo.update(m_project)) {
-            if (m_projectTitle) {
-                m_projectTitle->setText(m_project.title);
-            }
+            applyProjectTitle();
         } else {
             QMessageBox::warning(this, QStringLiteral("重命名"),
                                  QStringLiteral("重命名失败，请重试。"));

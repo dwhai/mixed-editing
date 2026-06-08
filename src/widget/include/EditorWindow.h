@@ -96,10 +96,12 @@ namespace Mixed {
 
     private:
         void setupUi();
-        QWidget *buildTopBar();      // 顶部：返回 + 工程名 + 时间码 + 逐帧 + 导出
+        void buildMenuBar();         // 窗口菜单栏：「工程」菜单含 返回 / 导出
+        QWidget *buildTopBar();      // 顶部：工程名
         QWidget *buildMediaPanel();  // 左侧：素材库
-        QWidget *buildPreviewArea(); // 中间：预览画面（合成输出）
-        QWidget *buildTimeline();    // 底部：时间线轨道
+        QWidget *buildPreviewArea(); // 中间：预览画面（合成输出）+ 播放控件
+        QWidget *buildTimeline();    // 底部：时间线轨道（标题行含分割/紧凑等工具）
+        void applyProjectTitle();    // 把当前工程名同步到顶栏标签与窗口标题
 
         // 数据层
         void ensureProject();        // 惰性创建工程 + 主序列 + 默认轨道（首次导入/添加片段时触发）
@@ -115,6 +117,9 @@ namespace Mixed {
         // 合成预览
         void rebuildComposition();   // 从数据库重建合成引擎的时间线快照 + 刷新时间线控件
         void refreshClipThumbnails();// 为各片段解码代表帧，下发给时间线控件做胶片条
+        // 视频片段在音频轨上的配对片段（同 asset、同起点）。无配对返回 nullopt。
+        // 操作视频片段时据此联动音轨（移动/裁剪/分割/删除同步）。
+        std::optional<DB::Clip> pairedAudioClip(const DB::Clip &videoClip);
         void moveClip(const QString &clipId, qint64 newStartUs); // 拖动后持久化片段新起点
         void deleteClip(const QString &clipId);  // 确认后从时间线删除单个片段
         void rippleDeleteClip(const QString &clipId);             // 波纹删除：后续片段前移补位

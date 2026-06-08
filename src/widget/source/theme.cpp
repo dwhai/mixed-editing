@@ -105,6 +105,17 @@ QLabel#draftThumb {
 QLabel#draftDate { color: #1a1d24; font-size: 12px; font-weight: 600; }
 QLabel#draftInfo { color: #8b92a3; font-size: 11px; }
 
+/* ---- Project card (home 工程列表) ---- */
+QFrame#projectCard {
+    min-width: 192px; max-width: 192px;
+    border-radius: 14px; background-color: #ffffff; border: 1px solid #e6e8ec;
+}
+QFrame#projectCard:hover { border-color: #b9cdf9; background-color: #fbfcff; }
+QWidget#projectCardInfo { background-color: transparent; }
+QLabel#projectThumb { background-color: #d7dae0; }
+QLabel#projectCardTitle { color: #1a1d24; font-size: 14px; font-weight: 600; }
+QLabel#projectCardMeta { color: #8b92a3; font-size: 11px; }
+
 /* ---- Player page ---- */
 /* 播放器容器用深炭灰而非纯黑：视频按宽高比居中铺放，上下黑边不至于死黑突兀 */
 QWidget#playerContainer { background-color: #15171c; border-radius: 10px; }
@@ -170,6 +181,23 @@ QSlider#volumeSlider::handle:vertical {
 /* ---- 剪辑工作区 (EditorWindow) ---- */
 QWidget#editorRoot { background-color: #f4f5f7; }
 
+/* 窗口菜单栏（工程：返回 / 导出） */
+QMenuBar#editorMenuBar {
+    background-color: #ffffff; border-bottom: 1px solid #e6e8ec;
+    color: #1a1d24; font-size: 13px; padding: 2px 6px;
+}
+QMenuBar#editorMenuBar::item {
+    background: transparent; padding: 6px 12px; border-radius: 6px;
+}
+QMenuBar#editorMenuBar::item:selected { background-color: #eef0f4; color: #1a1d24; }
+QMenuBar#editorMenuBar::item:pressed  { background-color: #e8eefc; color: #2f6df6; }
+QMenu {
+    background-color: #ffffff; border: 1px solid #e6e8ec; border-radius: 8px; padding: 4px;
+}
+QMenu::item { padding: 7px 22px; border-radius: 6px; color: #1a1d24; font-size: 13px; }
+QMenu::item:selected { background-color: #e8eefc; color: #2f6df6; }
+QMenu::separator { height: 1px; background-color: #e6e8ec; margin: 4px 8px; }
+
 /* 顶部操作栏 */
 QFrame#editorTopBar { background-color: #ffffff; border-bottom: 1px solid #e6e8ec; }
 QLabel#editorProjectTitle {
@@ -187,11 +215,6 @@ QPushButton#editorExportButton {
     background-color: #2f6df6; font-size: 13px; font-weight: 600; padding: 7px 20px;
 }
 QPushButton#editorExportButton:hover { background-color: #4b82f8; }
-
-/* 播放控件胶囊容器：逐帧 / 播放 / 时间码 居中成组 */
-QFrame#editorTransport {
-    background-color: #f4f5f7; border: 1px solid #e6e8ec; border-radius: 12px;
-}
 
 /* 编辑工具按钮（分割 / 紧凑排列） */
 QPushButton#editorToolButton {
@@ -236,23 +259,30 @@ QPushButton#editorAssetCard:hover { background-color: #eef2fb; border-color: #c9
 /* 中间预览区：深炭灰底，合成画面由 VideoGLWidget 渲染 */
 QFrame#editorPreviewArea { border-radius: 14px; background-color: #15171c; }
 
-/* 顶栏逐帧按钮与时间码（位于 #editorTransport 胶囊内，透明底融入容器） */
-QPushButton#editorStepButton {
-    border: none; border-radius: 6px; color: #5a6172;
-    background-color: transparent; font-size: 13px; min-width: 24px; padding: 5px 8px;
-}
-QPushButton#editorStepButton:hover { background-color: #e2e5ea; color: #1a1d24; }
-QLabel#editorTimecode {
-    color: #1a1d24; font-size: 13px; font-weight: 600;
-    background-color: #ffffff; border: 1px solid #e6e8ec;
-    border-radius: 6px; padding: 5px 12px; min-width: 96px;
+/* 预览区底部播放控件条（深色，融入预览区底色） */
+QFrame#editorPreviewControls {
+    background-color: #1c1f26;
+    border-bottom-left-radius: 14px; border-bottom-right-radius: 14px;
 }
 
-/* 顶栏播放/暂停按钮（强调态，胶囊内的主操作） */
+/* 预览区播放控件条内的逐帧按钮与时间码（深色底，浅色文字） */
+QPushButton#editorStepButton {
+    border: none; border-radius: 6px; color: #c7ccd6;
+    background-color: rgba(255, 255, 255, 8%); font-size: 13px;
+    min-width: 28px; padding: 6px 10px;
+}
+QPushButton#editorStepButton:hover { background-color: rgba(255, 255, 255, 16%); color: #ffffff; }
+QLabel#editorTimecode {
+    color: #e6ebf5; font-size: 13px; font-weight: 600;
+    background-color: rgba(255, 255, 255, 8%); border: none;
+    border-radius: 6px; padding: 6px 14px; min-width: 96px; qproperty-alignment: AlignCenter;
+}
+
+/* 预览区播放/暂停按钮（强调态，控件条主操作） */
 QPushButton#editorPlayButton {
     border: none; border-radius: 8px; color: #ffffff;
     background-color: #2f6df6; font-size: 14px; font-weight: 600;
-    min-width: 38px; padding: 6px 14px;
+    min-width: 40px; padding: 6px 16px;
 }
 QPushButton#editorPlayButton:hover { background-color: #4b82f8; }
 

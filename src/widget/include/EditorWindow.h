@@ -82,7 +82,8 @@ namespace Mixed {
         Q_OBJECT
 
     public:
-        explicit EditorWindow(QWidget *parent = nullptr);
+        // projectId 非空：打开该已有工程；为空：新建模式（首次导入/添加片段时落库建新工程）。
+        explicit EditorWindow(const QString &projectId = QString(), QWidget *parent = nullptr);
         ~EditorWindow() override;
 
     signals:
@@ -91,6 +92,7 @@ namespace Mixed {
 
     protected:
         void closeEvent(QCloseEvent *event) override;
+        bool eventFilter(QObject *watched, QEvent *event) override;
 
     private:
         void setupUi();
@@ -102,6 +104,8 @@ namespace Mixed {
         // 数据层
         void ensureProject();        // 惰性创建工程 + 主序列 + 默认轨道（首次导入/添加片段时触发）
         bool loadExistingProject();  // 仅加载已有工程（不创建）；成功返回 true。进入编辑器时调用。
+        bool loadProject(const QString &projectId); // 按 id 精确加载指定工程；成功返回 true。
+        void renameProject();        // 双击工程名 → 弹框重命名（新工程会先落库）
         void importMedia();          // 选文件 → 探测 → 落库 → 刷新
         void addClipFromAsset(const DB::MediaAsset &asset); // 追加片段到视频/音频轨
         void deleteAsset(const DB::MediaAsset &asset);      // 从素材库删除素材 + 级联删除其时间线片段
@@ -143,6 +147,7 @@ namespace Mixed {
 
         // 当前工程上下文
         DB::Project  m_project;
+        QString      m_requestedProjectId; // 构造时请求打开的工程 id（空=新建模式）
         DB::Sequence m_sequence;
         QString      m_videoTrackId;
         QString      m_audioTrackId;

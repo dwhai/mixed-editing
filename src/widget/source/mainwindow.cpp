@@ -40,21 +40,30 @@ namespace Mixed {
 
         m_pages = new QStackedWidget(root);
         m_pages->addWidget(new VideoListPage(root));   // 0 短剧（视频列表网格）
-        auto *homePage = new HomePage(root);
-        m_pages->addWidget(homePage);                  // 1 剪辑
+        m_homePage = new HomePage(root);
+        m_pages->addWidget(m_homePage);                // 1 剪辑
         m_pages->addWidget(new QWidget(root));         // 2 模板（占位）
         layout->addWidget(m_pages, 1);
 
         connect(topBar, &TopBar::pageRequested, this, &MainWindow::switchPage);
-        connect(homePage, &HomePage::createRequested, this, &MainWindow::openEditor);
+        // 「开始创作」新建空工程（空 id）；点工程卡片打开对应工程。
+        connect(m_homePage, &HomePage::createRequested, this,
+                [this]() { openEditor(QString()); });
+        connect(m_homePage, &HomePage::openProjectRequested, this,
+                &MainWindow::openEditor);
     }
 
-    void MainWindow::openEditor() {
-        if (!m_editor) {
-            m_editor = new EditorWindow();
-            // 编辑器关闭后恢复主窗口。
-            connect(m_editor, &EditorWindow::closed, this, &MainWindow::onEditorClosed);
+    void MainWindow::openEditor(const QString &projectId) {
+        // 每次按 id 新建独立编辑器实例，关闭即销毁，确保打开的就是所选工程。
+        if (m_editor) {
+            m_editor->deleteLater();
+            m_editor = nullptr;
         }
+        m_editor = new EditorWindow(projectId);
+        m_editor->setAttribute(Qt::WA_DeleteOnClose);
+        connect(m_editor, &EditorWindow::closed, this, &MainWindow::onEditorClosed);
+        connect(m_editor, &QObject::destroyed, this, [this]() { m_editor = nullptr; });
+
         hide();
         m_editor->show();
         m_editor->raise();
@@ -62,6 +71,10 @@ namespace Mixed {
     }
 
     void MainWindow::onEditorClosed() {
+        // 工程可能新建/重命名/改动，回主窗口刷新工程列表。
+        if (m_homePage) {
+            m_homePage->refreshProjects();
+        }
         show();
         raise();
         activateWindow();

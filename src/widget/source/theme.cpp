@@ -172,7 +172,11 @@ QWidget#editorRoot { background-color: #f4f5f7; }
 
 /* 顶部操作栏 */
 QFrame#editorTopBar { background-color: #ffffff; border-bottom: 1px solid #e6e8ec; }
-QLabel#editorProjectTitle { color: #1a1d24; font-size: 14px; font-weight: 600; }
+QLabel#editorProjectTitle {
+    color: #1a1d24; font-size: 14px; font-weight: 600;
+    border-radius: 6px; padding: 6px 10px;
+}
+QLabel#editorProjectTitle:hover { background-color: #eef0f4; }
 QPushButton#editorBackButton {
     border: none; border-radius: 8px; color: #5a6172;
     background-color: #eef0f4; font-size: 13px; padding: 7px 16px;
@@ -183,6 +187,18 @@ QPushButton#editorExportButton {
     background-color: #2f6df6; font-size: 13px; font-weight: 600; padding: 7px 20px;
 }
 QPushButton#editorExportButton:hover { background-color: #4b82f8; }
+
+/* 播放控件胶囊容器：逐帧 / 播放 / 时间码 居中成组 */
+QFrame#editorTransport {
+    background-color: #f4f5f7; border: 1px solid #e6e8ec; border-radius: 12px;
+}
+
+/* 编辑工具按钮（分割 / 紧凑排列） */
+QPushButton#editorToolButton {
+    border: none; border-radius: 8px; color: #5a6172;
+    background-color: #eef0f4; font-size: 13px; padding: 7px 14px;
+}
+QPushButton#editorToolButton:hover { background-color: #e2e5ea; color: #1a1d24; }
 
 /* 左侧素材库 */
 QFrame#editorMediaPanel { border-radius: 14px; background-color: #ffffff; border: 1px solid #e6e8ec; }
@@ -220,21 +236,23 @@ QPushButton#editorAssetCard:hover { background-color: #eef2fb; border-color: #c9
 /* 中间预览区：深炭灰底，合成画面由 VideoGLWidget 渲染 */
 QFrame#editorPreviewArea { border-radius: 14px; background-color: #15171c; }
 
-/* 顶栏逐帧按钮与时间码 */
+/* 顶栏逐帧按钮与时间码（位于 #editorTransport 胶囊内，透明底融入容器） */
 QPushButton#editorStepButton {
     border: none; border-radius: 6px; color: #5a6172;
-    background-color: #eef0f4; font-size: 12px; padding: 6px 10px;
+    background-color: transparent; font-size: 13px; min-width: 24px; padding: 5px 8px;
 }
 QPushButton#editorStepButton:hover { background-color: #e2e5ea; color: #1a1d24; }
 QLabel#editorTimecode {
     color: #1a1d24; font-size: 13px; font-weight: 600;
-    background-color: #f4f5f7; border-radius: 6px; padding: 6px 10px;
+    background-color: #ffffff; border: 1px solid #e6e8ec;
+    border-radius: 6px; padding: 5px 12px; min-width: 96px;
 }
 
-/* 顶栏播放/暂停按钮（强调态） */
+/* 顶栏播放/暂停按钮（强调态，胶囊内的主操作） */
 QPushButton#editorPlayButton {
-    border: none; border-radius: 6px; color: #ffffff;
-    background-color: #2f6df6; font-size: 13px; font-weight: 600; padding: 6px 14px;
+    border: none; border-radius: 8px; color: #ffffff;
+    background-color: #2f6df6; font-size: 14px; font-weight: 600;
+    min-width: 38px; padding: 6px 14px;
 }
 QPushButton#editorPlayButton:hover { background-color: #4b82f8; }
 

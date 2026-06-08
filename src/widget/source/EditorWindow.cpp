@@ -19,12 +19,15 @@
 
 #include <QCloseEvent>
 #include <QDateTime>
+#include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFrame>
 #include <QHash>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QListWidgetItem>
 #include <QMenu>
@@ -278,7 +281,8 @@ namespace Mixed {
         }
     }
 
-    EditorWindow::EditorWindow(QWidget *parent) : QMainWindow(parent) {
+    EditorWindow::EditorWindow(const QString &projectId, QWidget *parent)
+        : QMainWindow(parent), m_requestedProjectId(projectId) {
         setWindowTitle(QStringLiteral("剪辑工作区"));
         setStyleSheet(Theme::styleSheet());
         // 独立窗口：默认占据较大尺寸，剪辑需要充足的横向空间。
@@ -326,9 +330,13 @@ namespace Mixed {
                     m_exportQueue, &ExportQueueManager::cancelJob);
         }
 
-        // 进入编辑器即尝试加载上次的工程（仅加载不创建），恢复工作空间；
-        // 没有任何已有工程时渲染空时间线占位，等首次导入/添加再落库建工程。
-        if (!loadExistingProject()) {
+        // 进入编辑器：请求了具体工程则按 id 加载；否则为新建模式，渲染空时间线占位，
+        // 等首次导入/添加再落库建工程。
+        bool loaded = false;
+        if (!m_requestedProjectId.isEmpty()) {
+            loaded = loadProject(m_requestedProjectId);
+        }
+        if (!loaded) {
             rebuildComposition();
         }
     }
@@ -360,8 +368,8 @@ namespace Mixed {
         bar->setObjectName("editorTopBar");
 
         auto *layout = new QHBoxLayout(bar);
-        layout->setContentsMargins(16, 10, 16, 10);
-        layout->setSpacing(12);
+        layout->setContentsMargins(16, 8, 16, 8);
+        layout->setSpacing(10);
 
         auto *back = new QPushButton(QStringLiteral("‹  返回"), bar);
         back->setObjectName("editorBackButton");
@@ -370,40 +378,54 @@ namespace Mixed {
 
         m_projectTitle = new QLabel(QStringLiteral("未命名工程"), bar);
         m_projectTitle->setObjectName("editorProjectTitle");
+        m_projectTitle->setCursor(Qt::PointingHandCursor);
+        m_projectTitle->setToolTip(QStringLiteral("双击重命名工程"));
+        // 双击标题重命名：装事件过滤器捕获鼠标双击。
+        m_projectTitle->installEventFilter(this);
 
-        // 逐帧 + 时间码：上一帧 / 时间码 / 下一帧。
-        auto *prevFrame = new QPushButton(QStringLiteral("◀|"), bar);
+        // ---- 播放控件组（圆角胶囊容器）：上一帧 / ▶ / 时间码 / 下一帧 ----
+        auto *transport = new QFrame(bar);
+        transport->setObjectName("editorTransport");
+        auto *transportLayout = new QHBoxLayout(transport);
+        transportLayout->setContentsMargins(6, 4, 6, 4);
+        transportLayout->setSpacing(6);
+
+        auto *prevFrame = new QPushButton(QStringLiteral("◀|"), transport);
         prevFrame->setObjectName("editorStepButton");
         prevFrame->setCursor(Qt::PointingHandCursor);
         prevFrame->setToolTip(QStringLiteral("上一帧"));
         connect(prevFrame, &QPushButton::clicked, this, [this]() { stepFrame(-1); });
 
         // 播放 / 暂停。
-        m_playButton = new QPushButton(QStringLiteral("▶"), bar);
+        m_playButton = new QPushButton(QStringLiteral("▶"), transport);
         m_playButton->setObjectName("editorPlayButton");
         m_playButton->setCursor(Qt::PointingHandCursor);
         m_playButton->setToolTip(QStringLiteral("播放 / 暂停"));
         connect(m_playButton, &QPushButton::clicked, this, &EditorWindow::togglePlayback);
 
-        m_timecodeLabel = new QLabel(formatTimecode(0), bar);
+        m_timecodeLabel = new QLabel(formatTimecode(0), transport);
         m_timecodeLabel->setObjectName("editorTimecode");
 
-        auto *nextFrame = new QPushButton(QStringLiteral("|▶"), bar);
+        auto *nextFrame = new QPushButton(QStringLiteral("|▶"), transport);
         nextFrame->setObjectName("editorStepButton");
         nextFrame->setCursor(Qt::PointingHandCursor);
         nextFrame->setToolTip(QStringLiteral("下一帧"));
         connect(nextFrame, &QPushButton::clicked, this, [this]() { stepFrame(1); });
 
-        // 分割（在播放头处切开选中片段）。
+        transportLayout->addWidget(prevFrame);
+        transportLayout->addWidget(m_playButton);
+        transportLayout->addWidget(m_timecodeLabel);
+        transportLayout->addWidget(nextFrame);
+
+        // ---- 编辑工具组：分割 / 紧凑排列 ----
         auto *splitBtn = new QPushButton(QStringLiteral("分割"), bar);
-        splitBtn->setObjectName("editorStepButton");
+        splitBtn->setObjectName("editorToolButton");
         splitBtn->setCursor(Qt::PointingHandCursor);
         splitBtn->setToolTip(QStringLiteral("在播放头处分割选中片段"));
         connect(splitBtn, &QPushButton::clicked, this, &EditorWindow::splitSelectedAtPlayhead);
 
-        // 紧凑排列（消除各轨片段间隙：多视频合并到一轨）。
         auto *compactBtn = new QPushButton(QStringLiteral("紧凑排列"), bar);
-        compactBtn->setObjectName("editorStepButton");
+        compactBtn->setObjectName("editorToolButton");
         compactBtn->setCursor(Qt::PointingHandCursor);
         compactBtn->setToolTip(QStringLiteral("消除片段间隙，使各轨片段首尾相接"));
         connect(compactBtn, &QPushButton::clicked, this, &EditorWindow::compactTracks);
@@ -413,15 +435,12 @@ namespace Mixed {
         exportBtn->setCursor(Qt::PointingHandCursor);
         connect(exportBtn, &QPushButton::clicked, this, &EditorWindow::exportProject);
 
+        // 布局：左[返回·标题]  —伸缩—  中[播放组·工具组]  —伸缩—  右[导出]
         layout->addWidget(back);
-        layout->addStretch();
         layout->addWidget(m_projectTitle);
-        layout->addSpacing(16);
-        layout->addWidget(prevFrame);
-        layout->addWidget(m_playButton);
-        layout->addWidget(m_timecodeLabel);
-        layout->addWidget(nextFrame);
-        layout->addSpacing(12);
+        layout->addStretch();
+        layout->addWidget(transport);
+        layout->addSpacing(8);
         layout->addWidget(splitBtn);
         layout->addWidget(compactBtn);
         layout->addStretch();
@@ -550,7 +569,7 @@ namespace Mixed {
     // PLACEHOLDER_DATA
 
     bool EditorWindow::loadExistingProject() {
-        // 仅加载已有工程（不创建）。供进入编辑器时自动恢复上次工作空间。
+        // 仅加载已有工程（不创建）。加载当前账户下最近一个工程。
         if (!m_project.id.isEmpty()) {
             return true; // 已加载
         }
@@ -564,14 +583,27 @@ namespace Mixed {
         if (existing.empty()) {
             return false; // 无已有工程
         }
+        // listByAccount 已按 updated_at 倒序，front 即最近工程。
+        return loadProject(existing.front().id);
+    }
 
-        // 加载最新工程（listByAccount 已按 updated_at 倒序）。
-        m_project = existing.front();
+    bool EditorWindow::loadProject(const QString &projectId) {
+        // 按 id 精确加载指定工程及其主序列/轨道/素材/时间线。
+        if (projectId.isEmpty() || !DB::Database::instance().isOpen()) {
+            return false;
+        }
+        const std::optional<DB::Project> proj = m_projectRepo.findById(projectId);
+        if (!proj) {
+            return false; // 工程不存在或已删除
+        }
+
+        m_project = *proj;
         if (m_projectTitle) {
             m_projectTitle->setText(m_project.title);
         }
 
         // 加载主序列。
+        m_sequence = DB::Sequence{};
         const std::vector<DB::Sequence> sequences = m_sequenceRepo.listByProject(m_project.id);
         for (const DB::Sequence &seq : sequences) {
             if (seq.isMain) {
@@ -581,6 +613,8 @@ namespace Mixed {
         }
 
         // 加载轨道。
+        m_videoTrackId.clear();
+        m_audioTrackId.clear();
         if (!m_sequence.id.isEmpty()) {
             const std::vector<DB::Track> tracks = m_trackRepo.listBySequence(m_sequence.id);
             for (const DB::Track &track : tracks) {
@@ -607,15 +641,14 @@ namespace Mixed {
             return;
         }
 
-        // 已有工程则加载并返回。
-        if (loadExistingProject()) {
+        // 请求打开了具体工程则按 id 加载并返回（不新建）。
+        if (!m_requestedProjectId.isEmpty() && loadProject(m_requestedProjectId)) {
             return;
         }
 
+        // 新建模式：创建一个全新的空工程（不复用最近工程）。
         // 单用户场景：暂用固定本地账户 id（多用户登录后替换为当前账户）。
         ensureLocalAccount();
-
-        // 无已有工程，创建新的。
         m_project.accountId = QStringLiteral("local");
         m_project.title = QStringLiteral("未命名工程");
         if (!m_projectRepo.insert(m_project)) {
@@ -1406,6 +1439,47 @@ namespace Mixed {
             emit closed();
         }
         QMainWindow::closeEvent(event);
+    }
+
+    bool EditorWindow::eventFilter(QObject *watched, QEvent *event) {
+        // 双击工程名 → 重命名。
+        if (watched == m_projectTitle && event->type() == QEvent::MouseButtonDblClick) {
+            renameProject();
+            return true;
+        }
+        return QMainWindow::eventFilter(watched, event);
+    }
+
+    void EditorWindow::renameProject() {
+        // 新建模式下工程尚未落库：先建工程再改名。
+        ensureProject();
+        if (m_project.id.isEmpty()) {
+            QMessageBox::information(this, QStringLiteral("重命名"),
+                                     QStringLiteral("数据库未就绪，暂时无法重命名。"));
+            return;
+        }
+
+        bool ok = false;
+        const QString name = QInputDialog::getText(
+            this, QStringLiteral("重命名工程"), QStringLiteral("工程名称："),
+            QLineEdit::Normal, m_project.title, &ok);
+        if (!ok) {
+            return; // 用户取消
+        }
+        const QString trimmed = name.trimmed();
+        if (trimmed.isEmpty() || trimmed == m_project.title) {
+            return; // 空或未变更
+        }
+
+        m_project.title = trimmed;
+        if (m_projectRepo.update(m_project)) {
+            if (m_projectTitle) {
+                m_projectTitle->setText(m_project.title);
+            }
+        } else {
+            QMessageBox::warning(this, QStringLiteral("重命名"),
+                                 QStringLiteral("重命名失败，请重试。"));
+        }
     }
 
     EditorWindow::~EditorWindow() {

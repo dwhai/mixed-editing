@@ -46,6 +46,7 @@ namespace Mixed {
 
         Row *ensureRow(const DB::ExportJob &job);
         void applyJob(Row *row, const DB::ExportJob &job);
+        void dismissRow(const QString &jobId);   // 删除某行（终态后「清除」用）
         void updateVisibility();
         static QString statusText(const QString &status);
 

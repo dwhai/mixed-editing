@@ -69,9 +69,6 @@ namespace Mixed {
 
         row.cancel = new QPushButton(QStringLiteral("取消"), row.container);
         row.cancel->setCursor(Qt::PointingHandCursor);
-        const QString jobId = job.id;
-        connect(row.cancel, &QPushButton::clicked, this,
-                [this, jobId]() { emit cancelRequested(jobId); });
 
         h->addWidget(row.title);
         h->addWidget(row.status);
@@ -90,15 +87,44 @@ namespace Mixed {
         const bool terminal = job.status == QStringLiteral("done") ||
                               job.status == QStringLiteral("failed") ||
                               job.status == QStringLiteral("canceled");
-        // 终态：进度条置满（成功）或保持，取消按钮失效。
+        // 成功时进度条置满。
         if (job.status == QStringLiteral("done")) {
             row->bar->setValue(100);
         }
-        row->cancel->setEnabled(!terminal);
-        row->cancel->setVisible(!terminal);
+
+        // 重设按钮行为：运行中=「取消」(发 cancelRequested)；终态=「清除」(删除该行)。
+        // 每次都先断开旧连接，避免重复触发。
+        const QString jobId = job.id;
+        row->cancel->disconnect();
+        if (terminal) {
+            row->cancel->setText(QStringLiteral("清除"));
+            row->cancel->setEnabled(true);
+            row->cancel->setVisible(true);
+            connect(row->cancel, &QPushButton::clicked, this,
+                    [this, jobId]() { dismissRow(jobId); });
+        } else {
+            row->cancel->setText(QStringLiteral("取消"));
+            row->cancel->setEnabled(true);
+            row->cancel->setVisible(true);
+            connect(row->cancel, &QPushButton::clicked, this,
+                    [this, jobId]() { emit cancelRequested(jobId); });
+        }
+
         if (!job.errorMessage.isEmpty()) {
             row->status->setToolTip(job.errorMessage);
         }
+    }
+
+    void ExportQueuePanel::dismissRow(const QString &jobId) {
+        auto it = m_rows.find(jobId);
+        if (it == m_rows.end()) {
+            return;
+        }
+        if (it.value().container) {
+            it.value().container->deleteLater();
+        }
+        m_rows.erase(it);
+        updateVisibility();   // 清空后面板自动隐藏
     }
 
     void ExportQueuePanel::onJobAdded(const DB::ExportJob &job) {

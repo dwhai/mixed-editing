@@ -11,6 +11,7 @@ class QStackedWidget;
 
 namespace Mixed {
     class EditorWindow;
+    class HomePage;
 
     class MainWindow : public QMainWindow {
         Q_OBJECT
@@ -25,7 +26,7 @@ namespace Mixed {
 
     private slots:
         void switchPage(int index);
-        void openEditor();      // 隐藏主窗口并打开剪辑工作区
+        void openEditor(const QString &projectId); // 打开指定工程（空=新建）的剪辑工作区
         void onEditorClosed();  // 剪辑窗口关闭后恢复主窗口
 
     private:
@@ -33,6 +34,7 @@ namespace Mixed {
 
         QStackedWidget *m_pages = nullptr;
         EditorWindow *m_editor = nullptr;
+        HomePage *m_homePage = nullptr;
         bool macTitleBarConfigured = false;
     };
 } // Mixed

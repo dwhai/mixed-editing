@@ -48,6 +48,8 @@ namespace Mixed::Player {
         void clear();
 
         bool isRunning() const { return m_running; }
+        // 是否已开始实际播放（首个 PCM 块已喂入声卡）。用于播放控制器对齐音视频起播。
+        bool hasStarted() const { return m_started.load(); }
         int sampleRate() const { return m_sampleRate; }
         int channels() const { return m_channels; }
         int bytesPerSecond() const { return m_sampleRate * m_channels * 2; }

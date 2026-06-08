@@ -184,26 +184,34 @@ namespace Mixed::Player {
             static_cast<qint64>(std::llround(startUs / 1'000'000.0 * kAudioRate));
         const qint64 totalSamples =
             static_cast<qint64>(std::ceil(m_durationUs / 1'000'000.0 * kAudioRate));
-        const qint64 chunk = kAudioRate / 2;   // ~0.5s 一块（兼顾起播延迟与重开销）
+        if (startSample >= totalSamples) return;
 
-        qint64 pos = startSample;
-        std::vector<float> buf;
-        while (!m_abort.load() && pos < totalSamples) {
-            const qint64 end = std::min(pos + chunk, totalSamples);
-            mixAudioRange(m_audioSrc, pos, end, buf, m_abort);
-            if (m_abort.load()) break;
+        // 一次性混完整段（单一解码器/重采样器，无逐块重 seek 与 SwrContext 重建），
+        // 从根上消除每块边界的相位断点（杂音）。代价是起播前的一次混音延迟，
+        // 与导出走同一套 mixAudioRange 逻辑，音质一致。
+        std::vector<float> mixed;
+        mixAudioRange(m_audioSrc, startSample, totalSamples, mixed, m_abort);
+        if (m_abort.load()) return;
 
-            // float → S16 交错 PCM。
+        // 软限幅（与导出一致）。
+        for (float &v : mixed) v = std::clamp(v, -1.0f, 1.0f);
+
+        // 按固定切片（~50ms）流式喂给声卡，PTS 为绝对时间线秒。
+        const qint64 sliceSamples = kAudioRate / 20;     // 50ms
+        const qint64 totalFrames = static_cast<qint64>(mixed.size()) / kAudioCh;
+        qint64 pos = 0;
+        while (!m_abort.load() && pos < totalFrames) {
+            const qint64 n = std::min(sliceSamples, totalFrames - pos);
+
             AudioFrame af;
-            af.pts = static_cast<double>(pos) / kAudioRate;  // 绝对时间线秒
-            af.pcm.resize(static_cast<int>(buf.size()) * 2);
+            af.pts = static_cast<double>(startSample + pos) / kAudioRate;
+            af.pcm.resize(static_cast<int>(n) * kAudioCh * 2);   // S16 交错
             auto *out = reinterpret_cast<int16_t *>(af.pcm.data());
-            for (size_t s = 0; s < buf.size(); ++s) {
-                float v = std::clamp(buf[s], -1.0f, 1.0f);
-                out[s] = static_cast<int16_t>(std::lround(v * 32767.0f));
+            for (qint64 i = 0; i < n * kAudioCh; ++i) {
+                out[i] = static_cast<int16_t>(std::lround(mixed[static_cast<size_t>(pos) * kAudioCh + i] * 32767.0f));
             }
             m_audio->enqueue(af);
-            pos = end;
+            pos += n;
 
             // 缓冲节流：声卡已缓冲 >0.6s 则等一等，避免内存堆积。
             while (!m_abort.load() && m_audio->bufferedSeconds() > 0.6) {

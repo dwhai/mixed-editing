@@ -231,9 +231,32 @@ QLabel#editorTimecode {
     background-color: #f4f5f7; border-radius: 6px; padding: 6px 10px;
 }
 
+/* 顶栏播放/暂停按钮（强调态） */
+QPushButton#editorPlayButton {
+    border: none; border-radius: 6px; color: #ffffff;
+    background-color: #2f6df6; font-size: 13px; font-weight: 600; padding: 6px 14px;
+}
+QPushButton#editorPlayButton:hover { background-color: #4b82f8; }
+
 /* 底部时间线容器（时间线本体 TimelineView 为自绘控件） */
 QFrame#editorTimeline { background-color: #ffffff; border-top: 1px solid #e6e8ec; }
 QScrollArea#editorTimelineScroll { background-color: transparent; }
+
+/* 导出队列面板（非阻塞） */
+QFrame#exportQueuePanel {
+    background-color: #f9fafb; border: 1px solid #e6e8ec; border-radius: 8px;
+}
+QFrame#exportQueuePanel QProgressBar {
+    border: none; border-radius: 5px; background-color: #e8eaee;
+    height: 10px; text-align: center; font-size: 10px; color: #5a6172;
+}
+QFrame#exportQueuePanel QProgressBar::chunk { background-color: #2f6df6; border-radius: 5px; }
+QFrame#exportQueuePanel QPushButton {
+    border: none; border-radius: 6px; color: #5a6172;
+    background-color: #eef0f4; font-size: 12px; padding: 4px 12px;
+}
+QFrame#exportQueuePanel QPushButton:hover { background-color: #e2e5ea; color: #1a1d24; }
+QFrame#exportQueuePanel QPushButton:disabled { color: #b6bcc8; background-color: #f0f1f4; }
 )");
     }
 }
